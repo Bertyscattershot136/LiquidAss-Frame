@@ -1,5 +1,6 @@
-// The assPod's nodes in SteamVR's scene graph (systemui page): the assPod in one hand (the original
-// 3D model as SteamVR render models, device/asspod/model, with the live screen on a panel), and
+// The assPod's nodes in SteamVR's scene graph (systemui page): the assPod in one hand (its 3D model,
+// the Video or the nano, as SteamVR render models from device/asspod/model, or drawn by podd, with
+// the live screen on a panel), and
 // while it is out an invisible laser blocker where the menu was, with "(menu glyph) to close".
 //
 //   vsg-transform parent-path=/user/hand/<side>                the controller's pose
@@ -26,12 +27,12 @@ const MAIN = 'system.standalone::valve.steam.gamepadui.main';
 // The sheet, in the window's frame units (the window is 2.67 x 1.5 above its bottom centre; the bar
 // hangs below it): from under the bar to just over the top, a little wider than the window.
 const SHEET = { w: 3.2, h: 2.25, y: 0.55, z: 0.06 };   // the blocker
-const MODEL_W = 0.0618;          // m: the model's own width (tools/asspod-model, GEOMETRY.BODY)
+// The Video's geometry (model metres, tools/asspod-model GEOMETRY), the default when show() gets none.
+const VIDEO_GEO = { w: 0.0618, d: 0.0110, lcdCy: 0.0242, lcdW: 0.0508, winW: 0.0532, winH: 0.0405, wheelCy: -0.0240 };
+const VIDEO_SCALE = 0.085 / 0.0618;   // as shown (main.js FACE_WIDTH_M): DEFAULT_HOLD is for this body
 const OVERLAY_DZ = 0.00025;      // m (model units) in front of the plate: the screen panel (render-model body)
 const SCREEN_RECESS = 0.0004;    // m (model units) behind the plate's surface: the screen under podd's glass
 const VIDEO_BELOW = 0.0001;      // m (model units) behind the screen panel: podd's video picture
-const LCD_M = { cy: 0.0242, w: 0.0508 };   // the LCD on the model (face.js LCD, podd.cpp LCD_CY)
-const WIN_M = { w: 0.0532, h: 0.0405 };    // its window (face.js WINDOW, podd.cpp WIN)
 const CAPTION = { w: 1.0, y: 0.75, z: 0.075 };
 // The body in the hand (controller frame: x right, y up, -z forward): its rotation (w x y z) and
 // centre for the right hand, as placed with Reposition; the left hand mirrors it (defaultHold).
@@ -196,24 +197,22 @@ export function createSceneGraph() {
   // stereoscopy: the left half of its rect to the left eye). podd renders each eye's view of the
   // model through each face; the faces write no depth, so the screen inside shows through podd's
   // glass. The faces match podd's (native/podd/podd.cpp makeLayout): centre, right, up, normal.
-  function poddBody(parent, b, rects, pd, video) {
-    const k = b.w / MODEL_W;
-    // The screen panel is the window only, centred on it like the video panel: SteamVR orders
-    // see-through panels by their centres, so two panels on one axis keep their order from any angle
-    // (offset centres swapped it head on, and the screen hid the video).
-    const ppm = rects.face.w / b.w;
-    const ww = WIN_M.w * k * ppm, wh = WIN_M.h * k * ppm;
-    const win = { x: rects.face.x + rects.face.w / 2 - ww / 2, y: rects.face.y + rects.face.h / 2 - LCD_M.cy * k * ppm - wh / 2, w: ww, h: wh };
+  function poddBody(parent, b, rects, pd, video, geo) {
+    const k = b.w / geo.w;
+    // The screen panel is the window only (rects.win: where face.js draws it), centred on it like the
+    // video panel: SteamVR orders see-through panels by their centres, so two panels on one axis keep
+    // their order from any angle (offset centres swapped it head on, and the screen hid the video).
+    const win = rects.win;
     if (video && Array.isArray(pd.video)) {
       // the video's picture (podd's video tile, the frame twice: one per eye) just under the screen,
       // which is clear over it but for the overlays; first, so the screen blends over it
       const [vx, vy, vw, vh] = pd.video;
-      const pic = vxf([0, LCD_M.cy * k, b.d / 2 - (SCREEN_RECESS + VIDEO_BELOW) * k]);
+      const pic = vxf([0, geo.lcdCy * k, b.d / 2 - (SCREEN_RECESS + VIDEO_BELOW) * k]);
       pic.appendChild(vnode('panel', {
         key: pd.key,
         uv_min: [r6(vx / pd.texW), r6(vy / pd.texH)],
         uv_max: [r6((vx + 2 * vw) / pd.texW), r6((vy + vh) / pd.texH)],
-        'meters-per-pixel': r6(LCD_M.w * k / vw),
+        'meters-per-pixel': r6(geo.lcdW * k / vw),
         origin: [0, 0],
         interactive: false,
         visibility: 0,
@@ -224,8 +223,8 @@ export function createSceneGraph() {
       parent.appendChild(pic);
     }
     // recessed in the plate's opening, under podd's glass (which sits on the plate's surface)
-    const front = vxf([0, LCD_M.cy * k, b.d / 2 - SCREEN_RECESS * k]);
-    front.appendChild(pagePanel(win, b.w / rects.face.w, 'lgs-asspod-screen'));
+    const front = vxf([0, geo.lcdCy * k, b.d / 2 - SCREEN_RECESS * k]);
+    front.appendChild(pagePanel(win, geo.winW * k / win.w, 'lgs-asspod-screen'));
     parent.appendChild(front);
     const [hx, hy, hz] = pd.box;
     const faces = {
@@ -262,8 +261,23 @@ export function createSceneGraph() {
 
   // The body without podd: the model's parts as SteamVR render models (fixed lighting), the screen
   // panel just in front of the plate.
-  function body(parent, b, rects, modelDir, finish) {
-    const k = b.w / MODEL_W;
+  function body(parent, b, rects, modelDir, finish, model, geo) {
+    const k = b.w / geo.w;
+    if (model === 'nano') {
+      // the nano's parts: its colour's aluminum, the shared caps, ports and well; the screen panel
+      // over its window
+      const scaled = vxf([0, 0, 0]);
+      scaled.setAttribute('scale', [k, k, k].map(r6).join(' '));
+      const wheel = finish === 'black' ? 'black' : 'white';
+      const parts = [`nano_shell_${finish}`, `nano_back_${finish}`, `nano_center_${finish}`, `nano_wheel_${wheel}`,
+        'nano_cap_top', 'nano_cap_bottom', 'nano_ports', 'nano_well'];
+      for (const name of parts) scaled.appendChild(vnode('rendermodel', { source: `${modelDir}/${name}/${name}.obj` }));
+      parent.appendChild(scaled);
+      const front = vxf([0, geo.lcdCy * k, b.d / 2 + OVERLAY_DZ * k]);
+      front.appendChild(pagePanel(rects.win, geo.winW * k / rects.win.w, 'lgs-asspod-screen'));
+      parent.appendChild(front);
+      return;
+    }
     const fin = finish === 'white' ? 'white' : 'black';
     const scaled = vxf([0, 0, 0]);
     scaled.setAttribute('scale', [k, k, k].map(r6).join(' '));
@@ -281,15 +295,24 @@ export function createSceneGraph() {
 
   // The default place in the hand: where you put it with Reposition (2026-10-09, right hand), and
   // its mirror image across the controller's centre line for the left hand.
-  function defaultHold(side) {
+  // Another body keeps its wheel where the Video's is (over the stick), front faces level.
+  function defaultHold(side, b, geo) {
     const r = DEFAULT_HOLD;
-    if (side === 'right') return { rot: r.rot.slice(), centre: r.centre.slice() };
-    return { rot: [r.rot[0], r.rot[1], -r.rot[2], -r.rot[3]], centre: [-r.centre[0], r.centre[1], r.centre[2]] };
+    const h = side === 'right'
+      ? { rot: r.rot.slice(), centre: r.centre.slice() }
+      : { rot: [r.rot[0], r.rot[1], -r.rot[2], -r.rot[3]], centre: [-r.centre[0], r.centre[1], r.centre[2]] };
+    const k = b.w / geo.w;
+    const wheelV = [0, VIDEO_GEO.wheelCy * VIDEO_SCALE, VIDEO_GEO.d * VIDEO_SCALE / 2];
+    const wheelM = [0, geo.wheelCy * k, b.d / 2];
+    const d = qrot(h.rot, wheelV.map((v, i) => v - wheelM[i]));
+    h.centre = h.centre.map((v, i) => v + d[i]);
+    return h;
   }
 
   /**
    * Shows the assPod in `hand` ('left' | 'right') with the sheet over the menu.
-   * @param {{ hand: string, body: {w,h,d,r}, rects: {face, back, dim, text}, modelDir: string, finish: string,
+   * @param {{ hand: string, body: {w,h,d,r}, rects: {face, back, win, dim, text}, modelDir: string, finish: string,
+   *   model?: 'video'|'nano', geo?: {w, d, lcdCy, lcdW, winW, winH, wheelCy} (model metres),
    *   podd?: { key, texW, texH, box, tiles }, hold?: { rot, centre }, world?: { rot, centre } }} o
    *   podd: its layout (podd-out.json) when podd draws the body; hold: a place in the hand other than
    *   the default; world: pinned in the room (standing space) instead of on the hand
@@ -300,14 +323,15 @@ export function createSceneGraph() {
     if (!attach()) return null;
     clearNodes();
     const side = o.hand === 'left' ? 'left' : 'right';
-    const { rot, centre } = o.hold && o.hold.rot && o.hold.centre ? o.hold : defaultHold(side);
+    const geo = o.geo || VIDEO_GEO;
+    const { rot, centre } = o.hold && o.hold.rot && o.hold.centre ? o.hold : defaultHold(side, o.body, geo);
     // pinned in the room (Reposition: the controller moves, the assPod stays), else on the hand
     const hand = o.world
       ? vxf(o.world.centre, o.world.rot)
       : vxf([0, 0, 0], null, { 'parent-path': '/user/hand/' + side });
     const hold = o.world ? vxf([0, 0, 0]) : vxf(centre, rot);
-    if (o.podd && o.podd.tiles && Array.isArray(o.podd.box)) poddBody(hold, o.body, o.rects, o.podd, o.video);
-    else body(hold, o.body, o.rects, o.modelDir, o.finish);
+    if (o.podd && o.podd.tiles && Array.isArray(o.podd.box)) poddBody(hold, o.body, o.rects, o.podd, o.video, geo);
+    else body(hold, o.body, o.rects, o.modelDir, o.finish, o.model || 'video', geo);
     hand.appendChild(hold);
     st.root.appendChild(hand);
     // the sheet and the caption, on Steam's window

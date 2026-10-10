@@ -1,0 +1,253 @@
+<!doctype html>
+<!-- Turntable viewer for the procedural assPod nano (2nd generation), nano2-model.js.
+     Serve the repo root (the model imports device/asspod/src/brand/peach.js), e.g.
+       python -m http.server 8137
+     and open http://localhost:8137/tools/nano2-model/viewer.html -->
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>assPod nano viewer</title>
+<style>
+  :root { --bg: #eceef1; --ink: #1d1d1f; --muted: #6e6e73; --panel: rgba(255,255,255,0.72); --ring: #1d1d1f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #16171a; --ink: #f5f5f7; --muted: #a1a1a6; --panel: rgba(30,31,35,0.72); --ring: #f5f5f7; }
+  }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.4 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; overflow: hidden; }
+  canvas { display: block; }
+  .bar { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); display: flex; gap: 14px; align-items: center;
+    padding: 10px 16px; border-radius: 999px; background: var(--panel); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.12); max-width: calc(100vw - 32px); box-sizing: border-box; flex-wrap: wrap; justify-content: center; }
+  .sw { width: 26px; height: 26px; border-radius: 50%; border: 0; cursor: pointer; padding: 0; outline-offset: 3px; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15); }
+  .sw[aria-pressed="true"] { outline: 2px solid var(--ring); }
+  .name { min-width: 110px; text-align: center; font-weight: 600; }
+  .views { display: flex; gap: 6px; }
+  .views button { border: 0; background: transparent; color: var(--muted); font: inherit; cursor: pointer; padding: 4px 8px; border-radius: 8px; }
+  .views button:hover { color: var(--ink); background: rgba(127,127,127,0.12); }
+  .hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); color: var(--muted); font-size: 12px; text-align: center; width: calc(100vw - 32px); }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head><body>
+<div class="hint">click the wheel or center button · drag around the wheel to scroll · drag elsewhere to orbit<br>keys: ↑↓ scroll · enter select · esc menu · space play</div>
+<div class="bar">
+  <div id="swatches" style="display:flex;gap:10px"></div>
+  <div class="name" id="name"></div>
+  <div class="views">
+    <button data-view="front">Front</button><button data-view="back">Back</button>
+    <button data-view="top">Top</button><button data-view="bottom">Bottom</button>
+  </div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { createNano2Model, FINISHES } from './nano2-model.js';
+import { createNanoUI } from './nano2-ui.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envMap = pmrem.fromScene(new RoomEnvironment(renderer), 0.03).texture;
+scene.environment = envMap;
+
+const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.005, 10);
+camera.position.set(0.09, 0.03, 0.22);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.minDistance = 0.06;
+controls.maxDistance = 0.6;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 1.2;
+
+const key = new THREE.DirectionalLight(0xffffff, 1.2);
+key.position.set(0.3, 0.5, 0.6);
+scene.add(key);
+
+let nano = null;
+const screenCanvas = document.createElement('canvas');
+const ui = createNanoUI(screenCanvas, { onChange: () => nano?.markScreenDirty() });
+nano = createNano2Model({ envMap, finish: 'silver', screenCanvas, anisotropy: renderer.capabilities.getMaxAnisotropy() });
+scene.add(nano.root);
+
+// soft contact shadow under the turntable
+const sh = document.createElement('canvas');
+sh.width = sh.height = 128;
+{
+  const g = sh.getContext('2d');
+  const gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, 'rgba(0,0,0,0.28)');
+  gr.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gr;
+  g.fillRect(0, 0, 128, 128);
+}
+const shadow = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 0.05), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(sh), transparent: true, depthWrite: false }));
+shadow.rotation.x = -Math.PI / 2;
+shadow.position.y = -0.052;
+scene.add(shadow);
+
+const sw = document.getElementById('swatches');
+const nameEl = document.getElementById('name');
+function choose(k) {
+  nano.setFinish(k);
+  nameEl.textContent = FINISHES[k].name;
+  for (const b of sw.children) b.setAttribute('aria-pressed', String(b.dataset.k === k));
+}
+for (const [k, f] of Object.entries(FINISHES)) {
+  const b = document.createElement('button');
+  b.className = 'sw';
+  b.dataset.k = k;
+  b.title = f.name;
+  b.style.background = f.metal;
+  b.addEventListener('click', () => choose(k));
+  sw.append(b);
+}
+choose('silver');
+
+const VIEWS = {
+  front: [0, 0, 0.21], back: [0, 0, -0.21], top: [0, 0.16, 0.06], bottom: [0, -0.16, 0.06],
+};
+for (const b of document.querySelectorAll('[data-view]')) {
+  b.addEventListener('click', () => {
+    controls.autoRotate = false;
+    camera.position.set(...VIEWS[b.dataset.view]);
+    controls.target.set(0, 0, 0);
+    // drop any orbit momentum left from a drag, or it carries the camera off the preset
+    controls.enableDamping = false;
+    controls.update();
+    controls.enableDamping = true;
+  });
+}
+
+// ---- click sounds: a short filtered noise tick, like the piezo clicker
+let audio = null;
+function click(gain = 0.5) {
+  try {
+    audio ??= new AudioContext();
+    const n = Math.round(audio.sampleRate * 0.006);
+    const buf = audio.createBuffer(1, n, audio.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (n / 6));
+    const src = audio.createBufferSource();
+    src.buffer = buf;
+    const hp = audio.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 2500;
+    const g = audio.createGain();
+    g.gain.value = gain;
+    src.connect(hp).connect(g).connect(audio.destination);
+    src.start();
+  } catch { /* no audio: silent */ }
+}
+
+// ---- the wheel: press a sector or the center to click; drag around the ring to scroll
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const STEP = Math.PI / 12;               // one scroll tick per 15 degrees
+const SCROLL_START = 10 * Math.PI / 180; // further than this and a press becomes a scroll
+let touch = null;
+function rayFrom(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  return raycaster;
+}
+const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+// capture phase: runs before OrbitControls' own pointerdown, so it can keep the orbit out of it
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  controls.autoRotate = false;
+  const hit = nano.hitTestWheel(rayFrom(e));
+  if (!hit) return;
+  controls.enabled = false;
+  renderer.domElement.setPointerCapture(e.pointerId);
+  const part = nano.partAt(hit);
+  touch = { id: e.pointerId, part, onCenter: hit.onCenter, last: hit.angle, moved: 0, acc: 0, scrolling: false };
+  nano.pressDown(part);
+  click(0.35);
+}, { capture: true });
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!touch) {
+    renderer.domElement.style.cursor = nano.hitTestWheel(rayFrom(e)) ? 'pointer' : '';
+    return;
+  }
+  if (touch.onCenter || e.pointerId !== touch.id) return;
+  const p = nano.projectToWheel(rayFrom(e));
+  if (!p || Math.hypot(p.x, p.y) < 0.2) return;   // too near the hub to read an angle
+  const angle = Math.atan2(p.x, p.y);
+  const d = wrap(angle - touch.last);
+  touch.last = angle;
+  touch.moved += d;
+  if (!touch.scrolling && Math.abs(touch.moved) > SCROLL_START) {
+    touch.scrolling = true;
+    nano.pressUp(touch.part);   // it was a scroll, not a click
+    touch.acc = touch.moved;
+  } else if (touch.scrolling) {
+    touch.acc += d;
+  }
+  while (touch.scrolling && Math.abs(touch.acc) >= STEP) {
+    const dir = Math.sign(touch.acc);
+    touch.acc -= dir * STEP;
+    if (ui.scroll(dir)) click(0.25);
+  }
+});
+function endTouch(e) {
+  if (!touch || e.pointerId !== touch.id) return;
+  if (!touch.scrolling) {
+    ui.press(touch.part);
+    nano.pressUp(touch.part);
+    click(0.2);
+  }
+  touch = null;
+  controls.enabled = true;
+}
+renderer.domElement.addEventListener('pointerup', endTouch);
+renderer.domElement.addEventListener('pointercancel', endTouch);
+renderer.domElement.addEventListener('dblclick', (e) => {
+  if (!nano.hitTestWheel(rayFrom(e))) controls.autoRotate = !controls.autoRotate;
+});
+
+// keyboard: the same buttons
+const KEYS = { ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 };
+const KEY_PART = { Enter: 'select', Escape: 'menu', m: 'menu', ' ': 'play', '[': 'prev', ']': 'next' };
+addEventListener('keydown', (e) => {
+  if (e.key in KEYS) { e.preventDefault(); if (ui.scroll(KEYS[e.key])) click(0.25); return; }
+  const part = KEY_PART[e.key];
+  if (!part || e.repeat) return;
+  e.preventDefault();
+  nano.pressDown(part);
+  click(0.35);
+});
+addEventListener('keyup', (e) => {
+  const part = KEY_PART[e.key];
+  if (!part) return;
+  ui.press(part);
+  nano.pressUp(part);
+  click(0.2);
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  nano.update(dt);
+  ui.tick(dt);
+  controls.update();
+  renderer.render(scene, camera);
+});
+window.nano = nano;   // debug handles
+window.ui = ui;
+window.view = { camera, controls };
+</script>
+</body></html>

@@ -19,7 +19,7 @@ export const FONTS = {
 };
 
 export const M = {
-  W: SCREEN_W, H: SCREEN_H,
+  W: SCREEN_W, H: SCREEN_H,  // the logical screen: setScreenSize() switches it (the nano's is smaller)
   statusH: 22,              // includes the 1px bottom border; content starts at y=22
   rowH: 24, rows: 9,        // list area y=22..238 (2px white margin at the bottom)
   padX: 8,                  // label left inset
@@ -27,6 +27,17 @@ export const M = {
   chevronW: 6, chevronH: 10, chevronInset: 9,  // chevron right edge = rowRight - 9
   scrollbarW: 8,            // at x=312..320 when a list overflows; rows then end at 312
 };
+
+/**
+ * The logical screen, in the theme's own px: the Video's 320 x 240, or the nano's 240 x 180
+ * (models.js). Text and rows keep their size, so on the nano they fill more of the screen (six rows,
+ * as on the real one); the list's row count follows.
+ */
+export function setScreenSize(w, h) {
+  M.W = w;
+  M.H = h;
+  M.rows = Math.floor((h - M.statusH - 2) / M.rowH);
+}
 
 export const C = {
   bg: '#ffffff', text: '#000000', textHi: '#ffffff', textDim: '#6b6b6b',

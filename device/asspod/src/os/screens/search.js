@@ -11,7 +11,6 @@ import { songList, albumSongs } from './main-menu.js';
 
 const KEYS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', ' ', 'DEL', 'DONE'];
 const STRIP_H = 44;          // letter band at the bottom of the content area
-const RESULT_ROWS = 7;       // 7 x 24 px rows above the band
 const KEY_W = 22;
 
 function keyLabel(k) {
@@ -26,6 +25,8 @@ export function createSearch(ctx) {
   const keyFont = font(15, 600);
   const smallKeyFont = font(10, 700);
 
+  // result rows above the letter band: 7 on the Video, 4 on the nano
+  const resultRows = () => Math.floor((M.H - M.statusH - STRIP_H) / M.rowH);
   let query = '';
   let keyIndex = 0;
   let inResults = false;
@@ -92,6 +93,7 @@ export function createSearch(ctx) {
   return {
     id: 'search',
     title: 'Search',
+    adaptive: true,   // lays itself out on the current logical screen (os.js)
     enter() { runSearch(); },
     handle(e) {
       if (e.type === 'scroll') {
@@ -101,7 +103,7 @@ export function createSearch(ctx) {
           if (next >= results.length) return false;
           index = next;
           if (index < first) first = index;
-          if (index >= first + RESULT_ROWS) first = index - RESULT_ROWS + 1;
+          if (index >= first + resultRows()) first = index - resultRows() + 1;
           return true;
         }
         const next = keyIndex + e.delta;
@@ -127,10 +129,11 @@ export function createSearch(ctx) {
     draw(g, r, now) {
       g.fillStyle = C.bg;
       g.fillRect(r.x, r.y, r.w, r.h);
-      const listH = RESULT_ROWS * M.rowH;
-      const scroll = results.length > RESULT_ROWS;
+      const rows = resultRows();
+      const listH = rows * M.rowH;
+      const scroll = results.length > rows;
       const w = scroll ? M.W - M.scrollbarW : M.W;
-      for (let i = first; i < Math.min(results.length, first + RESULT_ROWS); i++) {
+      for (let i = first; i < Math.min(results.length, first + rows); i++) {
         const res = results[i];
         row.label = res.label;
         row.detail = res.kind;
@@ -145,7 +148,7 @@ export function createSearch(ctx) {
         g.fillText('No results', M.W / 2, r.y + 60);
         g.restore();
       }
-      if (scroll) ui.drawScrollbar(g, M.W - M.scrollbarW, r.y, listH, results.length, RESULT_ROWS, first);
+      if (scroll) ui.drawScrollbar(g, M.W - M.scrollbarW, r.y, listH, results.length, rows, first);
       drawStrip(g, r.y + r.h - STRIP_H);
     },
     highlight() {

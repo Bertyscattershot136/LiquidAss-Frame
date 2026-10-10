@@ -1,9 +1,13 @@
 // podd: the assPod's body with real shaders, for SteamVR's scene graph.
 //
-// SteamVR draws render models with fixed lighting only, so this renders the original model
-// (device/asspod/model, exported from tools/asspod-model) itself on the GPU: clearcoat plastic on
-// the front, mirror-polished steel on the back and edges, the engraved peach as satin, glass over the
-// screen, all lit by a studio environment and one key light.
+// SteamVR draws render models with fixed lighting only, so this renders the models (device/asspod/
+// model) itself on the GPU, lit by a studio environment and one key light. Two bodies, picked by the
+// spec's "model":
+//   video  the Video (tools/asspod-model): clearcoat plastic on the front, mirror-polished steel on
+//          the back and edges, the engraved peach as satin, glass over the screen
+//   nano   the nano, 2nd generation (tools/nano2-model): anodized aluminum (a tinted, bead-blasted
+//          metal under a thin oxide) with the laser-etched back paler and smoother, white plastic
+//          end caps, the click wheel and an aluminum center button
 //
 // How it reaches the headset: the body sits in a box of six panels in SteamVR's scene graph
 // (device/asspod/src/sg.js), rigid with the hand. For each face and each eye, podd renders the model
@@ -13,11 +17,12 @@
 // at the compositor's rate. The screen is not drawn here: the window shows the live screen panel
 // inside the box (glass reflections over it, transparent otherwise).
 //
-// Input:  --spec /dev/shm/lgs/podd.json  {open, hand, rot [w,x,y,z], centre [x,y,z], scale, finish}
-//         (the body in the controller's frame, written by device/shell_ext/asspod.py)
+// Input:  --spec /dev/shm/lgs/podd.json  {open, hand, rot [w,x,y,z], centre [x,y,z], scale, nanoScale, model, finish}
+//         (the body in the controller's frame, written by device/shell_ext/asspod.py; scale is the
+//         Video's, nanoScale the nano's; finish is the current model's colour)
 // Output: --out /dev/shm/lgs/podd-out.json {pid, ok, key, texW, texH, box [hx,hy,hz], tiles {face: [x,y,w,h]}}
-//         tiles are the left eye's rect in texture pixels (v = 0 at the top), with `pad` px of
-//         overscan around each eye; the right eye's starts tw + 2 pad to its right. A face's panel
+//         tiles are the left eye's rect in texture pixels (v = 0 at the top), with `pad` px around
+//         each eye (PAD px of overscan, then BAND px clear); the right eye's starts tw + 2 pad to its right. A face's panel
 //         shows [tx - pad, tx + 2 tw + 3 pad] x [ty - pad, ty + th + pad]. The overlay's mouse scale
 //         is half the texture's width (one eye).
 //
@@ -30,6 +35,7 @@
 #include <time.h>
 
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -42,16 +48,38 @@
 #include "json.h"
 #include "vmath.h"
 
-// ------------------------------------------------------------------ model constants (tools/asspod-model)
-static const float BODY_W = 0.0618f, BODY_H = 0.1035f, BODY_D = 0.0110f;
-static const float FRONT_Z = BODY_D / 2;
-static const float LCD_CY = 0.0242f, LCD_W = 0.0508f, LCD_H = 0.0381f;
-static const float WIN_W = 0.0532f, WIN_H = 0.0405f;
-static const float WHEEL_CY = -0.0240f, WHEEL_R = 0.0197f, WHEEL_RC = 0.0073f, WHEEL_RM = 0.0135f;
+// ------------------------------------------------------------------ the models (model metres)
+struct Geo {
+    float w, h, d;              // body
+    float lcdCy, lcdW, lcdH;    // the LCD (transparent: the screen panel shows through)
+    float winW, winH, winR;     // its window (winR: rounded corners drawn here; 0 = the plate's own hole)
+    float wheelCy, wheelRm;     // the wheel's centre and the touch marker's radius
+    float markerSigma;          // the marker's glow
+    float rockDeg, sink;        // press motion
+};
+// tools/asspod-model GEOMETRY
+static const Geo VIDEO = {0.0618f, 0.1035f, 0.0110f, 0.0242f, 0.0508f, 0.0381f, 0.0532f, 0.0405f, 0.f,
+                          -0.0240f, 0.0135f, 0.0028f, 2.5f, 0.0005f};
+// tools/nano2-model GEOMETRY
+static const Geo NANO = {0.040f, 0.090f, 0.0065f, 0.02888f, 0.0296f, 0.0222f, 0.03162f, 0.02404f, 0.0006f,
+                         -0.0133f, 0.0108f, 0.0021f, 2.2f, 0.0004f};
+// The nano's anodized colours (tools/nano2-model FINISHES metal, sRGB) and roughness.
+struct Finish { const char *name; float r, g, b, rough; };
+static const Finish NANO_FINISHES[] = {
+    {"silver", 0xd3 / 255.f, 0xd6 / 255.f, 0xda / 255.f, 0.42f}, {"green", 0x7f / 255.f, 0xd1 / 255.f, 0x2a / 255.f, 0.40f},
+    {"blue", 0x1e / 255.f, 0xa9 / 255.f, 0xe3 / 255.f, 0.40f},   {"pink", 0xec / 255.f, 0x2c / 255.f, 0x95 / 255.f, 0.40f},
+    {"black", 0x16 / 255.f, 0x17 / 255.f, 0x1a / 255.f, 0.46f},  {"red", 0xe0 / 255.f, 0x12 / 255.f, 0x1b / 255.f, 0.40f},
+};
 static const float MARGIN = 0.004f;       // m around the body: the box of panels
 static const float PX_PER_M = 4200.f;     // panel pixels per metre (about 1 px per 0.24 mm)
 static const int PAD = 3;                 // px rendered past each face's edge: neighbouring faces overlap,
                                           // so no panel edge (where texels blend with the gap) shows
+static const int BAND = 4;                // px left clear around each eye's image (outside its PAD): SteamVR
+                                          // splits a panel's rect between the eyes at its middle, and
+                                          // filtering at that seam took a sliver of the other eye's image,
+                                          // whose body colour at its edge showed as a faint line along the
+                                          // box's edge, about a cm off the body
+static const int SPAN = PAD + BAND;       // each eye's image to its block's edge
 
 static const float kPi = 3.14159265f;
 static volatile sig_atomic_t g_stop = 0;
@@ -188,10 +216,15 @@ in vec2 vUv;
 in vec3 vModel;
 uniform vec3 uEye;          // body space
 uniform mat3 uToWorld;      // body -> world rotation (the environment is fixed in the room)
-uniform int uMat;           // 0 plate, 1 steel, 2 steel back (engraving), 3 wheel, 4 well, 5 ports, 6 window glass
+uniform int uMat;           // 0 plate, 1 steel, 2 steel back (engraving), 3 wheel, 4 well, 5 ports, 6 window glass,
+                            // 7 anodized aluminum, 8 anodized back (engraving), 9 white plastic (texture), 10 palette (texture)
 uniform vec3 uBase;         // base colour (linear)
-uniform sampler2D uTex;     // wheel labels / engraving mask
+uniform float uRough;       // anodized: the blasted metal's roughness
+uniform sampler2D uTex;     // wheel labels / engraving mask / cap print / palette
 uniform vec4 uMarker;       // x angle (rad, 0 = top, clockwise), y opacity
+uniform vec3 uWheel;        // the wheel's centre y, the marker's radius, its glow (model metres)
+uniform vec3 uLcd;          // the LCD's centre y, half width, half height
+uniform vec3 uWin;          // the window's half width, half height, corner radius (0: square)
 out vec4 frag;
 
 const float PI = 3.14159265;
@@ -220,6 +253,15 @@ vec3 irradiance(vec3 n) {
     return c + vec3(1.0, 0.98, 0.95) * max(dot(n, KEY), 0.0) * 0.32 + vec3(0.14) * max(dot(n, FILL), 0.0);
 }
 float fresnel(float f0, float cosT) { return f0 + (1.0 - f0) * pow(1.0 - cosT, 5.0); }
+// value noise for the blasted aluminum's grain
+float hash3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+float vnoise(vec3 p) {
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = mix(mix(hash3(i), hash3(i + vec3(1, 0, 0)), f.x), mix(hash3(i + vec3(0, 1, 0)), hash3(i + vec3(1, 1, 0)), f.x), f.y);
+    float b = mix(mix(hash3(i + vec3(0, 0, 1)), hash3(i + vec3(1, 0, 1)), f.x), mix(hash3(i + vec3(0, 1, 1)), hash3(i + vec3(1, 1, 1)), f.x), f.y);
+    return mix(a, b, f.z);
+}
 vec3 fresnel3(vec3 f0, float cosT) { return f0 + (1.0 - f0) * pow(1.0 - cosT, 5.0); }
 
 void main() {
@@ -244,10 +286,10 @@ void main() {
         col = base * irradiance(nw) + fresnel(0.04, cosT) * envColor(r, 0.45);
         // the touch marker: a soft glow where the thumb is
         if (uMarker.y > 0.001) {
-            vec2 p = vModel.xy - vec2(0.0, -0.0240);
-            vec2 m = vec2(sin(uMarker.x), cos(uMarker.x)) * 0.0135;
+            vec2 p = vModel.xy - vec2(0.0, uWheel.x);
+            vec2 m = vec2(sin(uMarker.x), cos(uMarker.x)) * uWheel.y;
             float d = length(p - m);
-            col += vec3(0.55, 0.72, 1.0) * uMarker.y * exp(-d * d / (2.0 * 0.0028 * 0.0028)) * 0.9;
+            col += vec3(0.55, 0.72, 1.0) * uMarker.y * exp(-d * d / (2.0 * uWheel.z * uWheel.z)) * 0.9;
         }
     } else if (uMat == 4) {
         col = uBase * irradiance(nw);
@@ -255,8 +297,12 @@ void main() {
         col = uBase * irradiance(nw) + fresnel(0.3, cosT) * envColor(r, 0.35) * 0.5;
     } else if (uMat == 6) {
         // the window: black glossy border; the LCD itself transparent, with the glass's reflection
-        vec2 p = vModel.xy - vec2(0.0, 0.0242);
-        bool lcd = abs(p.x) < 0.0254 && abs(p.y) < 0.01905;
+        vec2 p = vModel.xy - vec2(0.0, uLcd.x);
+        if (uWin.z > 0.0) {   // rounded corners (the nano's window lies on the aluminum)
+            vec2 q = abs(p) - (uWin.xy - uWin.z);
+            if (length(max(q, 0.0)) > uWin.z) discard;
+        }
+        bool lcd = abs(p.x) < uLcd.y && abs(p.y) < uLcd.z;
         vec3 refl = fresnel(0.04, cosT) * envColor(r, 0.02);
         if (lcd) {
             float a = clamp(max(refl.r, max(refl.g, refl.b)), 0.0, 1.0);
@@ -265,6 +311,30 @@ void main() {
             return;
         }
         col = vec3(0.004) + refl;
+    } else if (uMat == 7 || uMat == 8) {
+        // anodized aluminum: a dyed metal, bead-blasted (fine grain), under a thin clear oxide. The
+        // laser engraving on the back takes the dye and the blasting with it: paler and smoother.
+        float etch = uMat == 8 ? texture(uTex, vec2(vUv.x, 1.0 - vUv.y)).r : 0.0;
+        vec3 gp = vModel * 5200.0;   // grain cells about 0.2 mm
+        float grain = vnoise(gp) * 0.65 + vnoise(gp * 2.3 + 7.1) * 0.35 - 0.5;
+        vec3 jitter = vec3(vnoise(gp + 3.1), vnoise(gp + 5.7), vnoise(gp + 9.2)) - 0.5;
+        vec3 ng = normalize(n + jitter * 0.07 * (1.0 - etch));
+        vec3 rg = normalize(uToWorld * reflect(-v, ng));
+        float cosG = clamp(dot(ng, v), 0.0, 1.0);
+        float rough = mix(uRough + grain * 0.08, 0.16, etch);
+        vec3 tint = mix(uBase, mix(uBase, vec3(0.85), 0.55), etch);
+        vec3 spec = fresnel3(tint, cosG) * envColor(rg, rough);
+        vec3 diff = tint * irradiance(nw) * 0.85;   // the blasted surface scatters: its colour shows from any side
+        vec3 coat = fresnel(0.04, cosT) * envColor(r, 0.1) * 0.5;
+        col = (spec + diff) * (1.0 + grain * 0.1) + coat;
+    } else if (uMat == 9) {
+        // the nano's end caps: white satin plastic (the print from the texture)
+        vec3 base = pow(texture(uTex, vec2(vUv.x, 1.0 - vUv.y)).rgb, vec3(2.2));
+        col = base * irradiance(nw) * (1.0 - fresnel(0.04, cosT)) + fresnel(0.04, cosT) * envColor(r, 0.3) * 0.6;
+    } else if (uMat == 10) {
+        // the nano's ports: each part's colour from the palette texture
+        vec3 base = pow(texture(uTex, vec2(vUv.x, 1.0 - vUv.y)).rgb, vec3(2.2));
+        col = base * irradiance(nw) + fresnel(0.3, cosT) * envColor(r, 0.35) * 0.5 * max(base.r, 0.1);
     } else {
         // the front plate and centre button: plastic under a clear coat
         vec3 diffuse = uBase * irradiance(nw);
@@ -283,8 +353,8 @@ struct Face {
     const char *name;
     v3 c, R, U, N;   // body space: centre, right, up, outward normal
     float w, h;      // metres
-    int tx, ty, tw, th;   // the left eye's tile (texture px, top-left origin) inside PAD px of overscan;
-                          // the right eye's at tx + tw + 2 PAD
+    int tx, ty, tw, th;   // the left eye's tile (texture px, top-left origin) inside PAD px of overscan
+                          // and BAND px clear; the right eye's at tx + tw + 2 SPAN
 };
 
 struct Layout {
@@ -299,11 +369,12 @@ struct Layout {
 static const int VIDEO_W = 320, VIDEO_H = 240;
 static const char *VIDEO_FILE = "/dev/shm/lgs/podd-video";
 
-static Layout makeLayout(float scale) {
+// The box holds either body at its scale, so switching models keeps the layout (and the page's panels).
+static Layout makeLayout(float scale, float nanoScale) {
     Layout L;
-    L.hx = BODY_W * scale / 2 + MARGIN;
-    L.hy = BODY_H * scale / 2 + MARGIN;
-    L.hz = BODY_D * scale / 2 + MARGIN;
+    L.hx = std::max(VIDEO.w * scale, NANO.w * nanoScale) / 2 + MARGIN;
+    L.hy = std::max(VIDEO.h * scale, NANO.h * nanoScale) / 2 + MARGIN;
+    L.hz = std::max(VIDEO.d * scale, NANO.d * nanoScale) / 2 + MARGIN;
     const float hx = L.hx, hy = L.hy, hz = L.hz;
     L.f = {{
         {"front", {0, 0, hz}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}, 2 * hx, 2 * hy},
@@ -314,17 +385,20 @@ static Layout makeLayout(float scale) {
         {"bottom", {0, -hy, 0}, {1, 0, 0}, {0, 0, 1}, {0, -1, 0}, 2 * hx, 2 * hz},
     }};
     // two rows: front, back, right, left (all as tall as the body); then top and bottom. A face's block
-    // is both eyes with PAD px around each: [PAD | left eye | 2 PAD | right eye | PAD]
-    const int gap = 4;
+    // is both eyes, each in PAD px of overscan and BAND px clear: [SPAN | left eye | 2 SPAN | right eye | SPAN]. The blocks (and
+    // the opaque video tile) stand GAP px apart: a panel seen at a slant samples well past its own edge
+    // (coarse texture levels), and 4 px let it pick up a neighbour's body or the black video tile, a
+    // thin flickering line along the box's edges, a few mm off the body.
+    const int gap = 64;
     int x = 0, row0 = 0;
     for (int i = 0; i < 4; i++) {
         Face &F = L.f[size_t(i)];
         F.tw = int(std::lround(F.w * PX_PER_M));
         F.th = int(std::lround(F.h * PX_PER_M));
-        F.tx = x + PAD;
-        F.ty = PAD;
-        x += 2 * F.tw + 4 * PAD + gap;
-        row0 = std::max(row0, F.th + 2 * PAD);
+        F.tx = x + SPAN;
+        F.ty = SPAN;
+        x += 2 * F.tw + 4 * SPAN + gap;
+        row0 = std::max(row0, F.th + 2 * SPAN);
     }
     int w0 = x;
     x = 0;
@@ -333,10 +407,10 @@ static Layout makeLayout(float scale) {
         Face &F = L.f[size_t(i)];
         F.tw = int(std::lround(F.w * PX_PER_M));
         F.th = int(std::lround(F.h * PX_PER_M));
-        F.tx = x + PAD;
-        F.ty = row0 + gap + PAD;
-        x += 2 * F.tw + 4 * PAD + gap;
-        row1 = std::max(row1, F.th + 2 * PAD);
+        F.tx = x + SPAN;
+        F.ty = row0 + gap + SPAN;
+        x += 2 * F.tw + 4 * SPAN + gap;
+        row1 = std::max(row1, F.th + 2 * SPAN);
     }
     // the video tile under the second row
     L.vx = x;
@@ -426,6 +500,8 @@ struct Spec {
     quat rot;
     v3 centre;
     float scale = 1.375f;
+    float nanoScale = 1.3125f;
+    std::string model = "video";
     std::string finish = "black";
     bool world = false;   // pinned in the room (Reposition): wrot / wcentre in standing space
     quat wrot;
@@ -441,6 +517,8 @@ static bool readSpec(const std::string &path, Spec &s) {
     s.open = j.boolean("open", false);
     s.hand = j.str("hand", "right");
     s.scale = float(j.num("scale", 1.375));
+    s.nanoScale = float(j.num("nanoScale", 1.3125));
+    s.model = j.str("model", "video");
     s.finish = j.str("finish", "black");
     const JVal *r = j.get("rot"), *c = j.get("centre");
     if (r && r->type == JVal::Arr && r->a.size() == 4) s.rot = qnorm({float(r->a[0].n), float(r->a[1].n), float(r->a[2].n), float(r->a[3].n)});
@@ -495,53 +573,74 @@ int main(int argc, char **argv) {
     Program prog;
     if (!linkProgram(prog, VS, FS, "pod")) return 1;
 
-    // the parts (both finishes' plates, wheels and buttons are loaded; the spec picks)
-    struct Part { std::string name; int mat; v3 base; Mesh mesh; GLuint tex = 0; bool wheel = false, center = false; };
+    // The parts of both models. A part with a variant is drawn only in that finish (the Video's
+    // plates; the nano's wheels: black on the black one, white on the others); a tinted part takes the
+    // nano's finish colour (one mesh for every colour). tex: the RGBA podd samples (a path in the
+    // model dir), if any.
+    struct Part {
+        std::string model, name, variant, tex;
+        int mat;
+        v3 base;
+        bool tint = false;
+        Mesh mesh;
+        GLuint texId = 0;
+        bool wheel = false, center = false;
+    };
+    const v3 W1 = {1, 1, 1};
     std::vector<Part> parts = {
-        {"asspod_steel_back", 2, {0.9f, 0.9f, 0.9f}},
-        {"asspod_steel_edge", 1, {0.9f, 0.9f, 0.9f}},
-        {"asspod_ports", 5, {0.03f, 0.03f, 0.035f}},
-        {"asspod_plate_black", 0, {0.004f, 0.004f, 0.0045f}},
-        {"asspod_plate_white", 0, {0.86f, 0.86f, 0.84f}},
-        {"asspod_well_black", 4, {0.002f, 0.002f, 0.002f}},
-        {"asspod_well_white", 4, {0.25f, 0.25f, 0.24f}},
-        {"asspod_wheel_black", 3, {1, 1, 1}},
-        {"asspod_wheel_white", 3, {1, 1, 1}},
-        {"asspod_center_black", 0, {0.004f, 0.004f, 0.0045f}},
-        {"asspod_center_white", 0, {0.86f, 0.86f, 0.84f}},
+        {"video", "asspod_steel_back", "", "asspod_steel_back/asspod_steel_back_mask.rgba", 2, {0.9f, 0.9f, 0.9f}},
+        {"video", "asspod_steel_edge", "", "", 1, {0.9f, 0.9f, 0.9f}},
+        {"video", "asspod_ports", "", "", 5, {0.03f, 0.03f, 0.035f}},
+        {"video", "asspod_plate_black", "black", "", 0, {0.004f, 0.004f, 0.0045f}},
+        {"video", "asspod_plate_white", "white", "", 0, {0.86f, 0.86f, 0.84f}},
+        {"video", "asspod_well_black", "black", "", 4, {0.002f, 0.002f, 0.002f}},
+        {"video", "asspod_well_white", "white", "", 4, {0.25f, 0.25f, 0.24f}},
+        {"video", "asspod_wheel_black", "black", "asspod_wheel_black/asspod_wheel_black_color.rgba", 3, W1},
+        {"video", "asspod_wheel_white", "white", "asspod_wheel_white/asspod_wheel_white_color.rgba", 3, W1},
+        {"video", "asspod_center_black", "black", "", 0, {0.004f, 0.004f, 0.0045f}},
+        {"video", "asspod_center_white", "white", "", 0, {0.86f, 0.86f, 0.84f}},
+        {"nano", "nano_shell_silver", "", "", 7, W1, true},
+        {"nano", "nano_back_silver", "", "nano_back_mask/nano_back_mask.rgba", 8, W1, true},
+        {"nano", "nano_center_silver", "", "", 7, W1, true},
+        {"nano", "nano_wheel_white", "white", "nano_wheel_white/nano_wheel_white_color.rgba", 3, W1},
+        {"nano", "nano_wheel_black", "black", "nano_wheel_black/nano_wheel_black_color.rgba", 3, W1},
+        {"nano", "nano_cap_top", "", "nano_cap_top/nano_cap_top_color.rgba", 9, W1},
+        {"nano", "nano_cap_bottom", "", "nano_cap_bottom/nano_cap_bottom_color.rgba", 9, W1},
+        {"nano", "nano_ports", "", "nano_ports/nano_ports_color.rgba", 10, W1},
+        {"nano", "nano_well", "", "", 4, {0.002f, 0.002f, 0.002f}},
     };
     for (auto &p : parts) {
         std::string dir = modelDir + "/" + p.name + "/";
         if (!loadObj(dir + p.name + ".obj", p.mesh)) { std::printf("cannot load %s\n", p.name.c_str()); return 1; }
-        if (p.mat == 3) p.tex = loadRgba(dir + p.name + "_color.rgba");
-        if (p.mat == 2) p.tex = loadRgba(dir + p.name + "_mask.rgba");
+        if (!p.tex.empty()) p.texId = loadRgba(modelDir + "/" + p.tex);
         p.wheel = p.name.find("wheel") != std::string::npos;
         p.center = p.name.find("center") != std::string::npos;
     }
-    // the window: a quad over the plate's opening (border + transparent LCD), in model metres
-    Mesh window;
-    {
-        const float z = FRONT_Z + 0.00008f, hw = WIN_W / 2, hh = WIN_H / 2, cy = LCD_CY;
+    // the windows: a quad over each model's screen (border + transparent LCD), in model metres
+    auto windowQuad = [](const Geo &G) {
+        Mesh m;
+        const float z = G.d / 2 + 0.00008f, hw = G.winW / 2, hh = G.winH / 2, cy = G.lcdCy;
         const float q[] = {-hw, cy - hh, z, 0, 0, 1, 0, 0, hw, cy - hh, z, 0, 0, 1, 1, 0, hw, cy + hh, z, 0, 0, 1, 1, 1,
                            -hw, cy - hh, z, 0, 0, 1, 0, 0, hw, cy + hh, z, 0, 0, 1, 1, 1, -hw, cy + hh, z, 0, 0, 1, 0, 1};
-        glGenVertexArrays(1, &window.vao);
-        glGenBuffers(1, &window.vbo);
-        glBindVertexArray(window.vao);
-        glBindBuffer(GL_ARRAY_BUFFER, window.vbo);
+        glGenVertexArrays(1, &m.vao);
+        glGenBuffers(1, &m.vbo);
+        glBindVertexArray(m.vao);
+        glBindBuffer(GL_ARRAY_BUFFER, m.vbo);
         glBufferData(GL_ARRAY_BUFFER, sizeof q, q, GL_STATIC_DRAW);
         for (int i = 0; i < 3; i++) glEnableVertexAttribArray(GLuint(i));
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 32, reinterpret_cast<void *>(0));
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 32, reinterpret_cast<void *>(12));
         glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 32, reinterpret_cast<void *>(24));
         glBindVertexArray(0);
-        window.count = 6;
-    }
-    (void)LCD_W; (void)LCD_H; (void)WHEEL_R; (void)WHEEL_RC; (void)WHEEL_RM;
+        m.count = 6;
+        return m;
+    };
+    const Mesh windowVideo = windowQuad(VIDEO), windowNano = windowQuad(NANO);
 
     Spec spec;
     struct stat lastSt{};
-    Layout L = makeLayout(spec.scale);
-    float layoutScale = -1;
+    Layout L = makeLayout(spec.scale, spec.nanoScale);
+    float layoutScale = -1, layoutNanoScale = -1;
 
     vr::VROverlayHandle_t ov = vr::k_ulOverlayHandleInvalid;
     if (vr::VROverlay()->CreateOverlay(key.c_str(), "assPod", &ov) != vr::VROverlayError_None) {
@@ -608,7 +707,7 @@ int main(int argc, char **argv) {
 
     auto writeOut = [&](bool ok, long frames, float fpsNow, float ms) {
         std::string o = "{\"pid\": " + std::to_string(getpid()) + ", \"ok\": " + (ok ? "true" : "false") + ", \"key\": \"" + key +
-                        "\", \"texW\": " + std::to_string(L.texW) + ", \"texH\": " + std::to_string(L.texH) + ", \"pad\": " + std::to_string(PAD) + ", \"box\": [" +
+                        "\", \"texW\": " + std::to_string(L.texW) + ", \"texH\": " + std::to_string(L.texH) + ", \"pad\": " + std::to_string(SPAN) + ", \"box\": [" +
                         std::to_string(L.hx) + ", " + std::to_string(L.hy) + ", " + std::to_string(L.hz) + "], \"tiles\": {";
         for (size_t i = 0; i < L.f.size(); i++) {
             const Face &F = L.f[i];
@@ -649,6 +748,8 @@ int main(int argc, char **argv) {
     handIn[0].path = pathL;
     handIn[1].path = pathR;
     float marker = 0, markerAngle = 0, sink = 0, rock = 0, rockAngle = 0;
+    std::string debugMode;
+    struct stat debugSt{};
 
     long frames = 0;
     uint64_t lastOut = 0, fpsT0 = nowNs();
@@ -670,9 +771,10 @@ int main(int argc, char **argv) {
             lastSt = st;
             readSpec(specPath, spec);
         }
-        if (std::fabs(spec.scale - layoutScale) > 1e-5f) {
-            L = makeLayout(spec.scale);
+        if (std::fabs(spec.scale - layoutScale) > 1e-5f || std::fabs(spec.nanoScale - layoutNanoScale) > 1e-5f) {
+            L = makeLayout(spec.scale, spec.nanoScale);
             layoutScale = spec.scale;
+            layoutNanoScale = spec.nanoScale;
             if (!allocate()) { std::printf("cannot allocate %dx%d\n", L.texW, L.texH); return 1; }
             writeOut(true, frames, 0, 0);
             std::printf("layout %dx%d (scale %.3f)\n", L.texW, L.texH, double(spec.scale));
@@ -734,6 +836,21 @@ int main(int argc, char **argv) {
         rock += (((clicked && !centred) ? 1.f : 0.f) - rock) * std::min(1.f, dt / 0.05f);
         if (clicked && !centred) rockAngle = std::round(markerAngle / (kPi / 2)) * (kPi / 2);
 
+        // debugging: /tmp/lgs/podd-debug "blank" draws nothing; "dot" only a white dot at the front face's
+        // centre (each eye); "faces:front,left" only those faces
+        {
+            struct stat ds{};
+            if (stat("/tmp/lgs/podd-debug", &ds) == 0) {
+                if (ds.st_mtim.tv_sec != debugSt.st_mtim.tv_sec || ds.st_mtim.tv_nsec != debugSt.st_mtim.tv_nsec) {
+                    debugSt = ds;
+                    readFile("/tmp/lgs/podd-debug", debugMode);
+                    while (!debugMode.empty() && std::isspace(static_cast<unsigned char>(debugMode.back()))) debugMode.pop_back();
+                }
+            } else {
+                debugMode.clear();
+                debugSt = {};
+            }
+        }
         // render: every face, both eyes
         DmaTarget &B = bufs[size_t(cur)];
         glBindFramebuffer(GL_FRAMEBUFFER, msFbo);
@@ -745,28 +862,41 @@ int main(int argc, char **argv) {
         glEnable(GL_DEPTH_TEST);
         glDisable(GL_CULL_FACE);
         glDisable(GL_BLEND);
+        const bool nano = spec.model == "nano";
+        const Geo &G = nano ? NANO : VIDEO;
+        Finish fin = NANO_FINISHES[0];
+        for (const Finish &f : NANO_FINISHES)
+            if (spec.finish == f.name) fin = f;
+        auto lin = [](float c) { return std::pow(c, 2.2f); };
         prog.use();
-        prog.set("uScale", spec.scale);
+        prog.set("uScale", nano ? spec.nanoScale : spec.scale);
+        prog.set("uRough", fin.rough);
+        prog.set("uWheel", G.wheelCy, G.wheelRm, G.markerSigma);
+        prog.set("uLcd", G.lcdCy, G.lcdW / 2, G.lcdH / 2);
+        prog.set("uWin", G.winW / 2, G.winH / 2, G.winR);
         prog.set("uTex", 0);
         float toWorld[9];
         for (int i = 0; i < 3; i++)
             for (int j = 0; j < 3; j++) toWorld[j * 3 + i] = body.r[i][j];   // column-major
         glUniformMatrix3fv(prog.loc("uToWorld"), 1, GL_FALSE, toWorld);
         prog.set("uMarker", markerAngle, marker, 0.f, 0.f);
-        const bool white = spec.finish == "white";
+        // the variant drawn: the Video's finish; the nano's wheel is black only on the black one
+        const std::string variant = nano ? (spec.finish == "black" ? "black" : "white") : (spec.finish == "white" ? "white" : "black");
         for (int eye = 0; eye < 2; eye++) {
             const Pose e2h = fromVR(vr::VRSystem()->GetEyeToHeadTransform(eye ? vr::Eye_Right : vr::Eye_Left));
             const v3 eyeW = (hmd * e2h).t;
             const v3 eyeB = toBody.apply(eyeW);
             prog.set("uEye", eyeB.x, eyeB.y, eyeB.z);
             for (const Face &F : L.f) {
+                if (debugMode == "blank" || debugMode == "dot") continue;
+                if (debugMode.rfind("faces:", 0) == 0 && debugMode.find(F.name) == std::string::npos) continue;
                 float P[16], V[16];
                 // the face grown by PAD px on every side (the panel shows it all)
-                Face G = F;
-                G.w = F.w * float(F.tw + 2 * PAD) / float(F.tw);
-                G.h = F.h * float(F.th + 2 * PAD) / float(F.th);
-                if (!faceMatrices(G, eyeB, P, V)) continue;
-                const int x = F.tx - PAD + eye * (F.tw + 2 * PAD);
+                Face grown = F;
+                grown.w = F.w * float(F.tw + 2 * PAD) / float(F.tw);
+                grown.h = F.h * float(F.th + 2 * PAD) / float(F.th);
+                if (!faceMatrices(grown, eyeB, P, V)) continue;
+                const int x = F.tx - PAD + eye * (F.tw + 2 * SPAN);
                 const int y = F.ty - PAD, vw = F.tw + 2 * PAD, vh = F.th + 2 * PAD;
                 // GL rows count from the buffer's first row (the texture's top)
                 glViewport(x, y, vw, vh);
@@ -775,15 +905,15 @@ int main(int argc, char **argv) {
                 prog.mat4("uProj", P);
                 prog.mat4("uView", V);
                 for (auto &p : parts) {
-                    const bool isWhite = p.name.find("_white") != std::string::npos, isBlack = p.name.find("_black") != std::string::npos;
-                    if ((isWhite && !white) || (isBlack && white)) continue;
+                    if (p.model != (nano ? "nano" : "video")) continue;
+                    if (!p.variant.empty() && p.variant != variant) continue;
                     Pose m;   // the part's own motion, about the wheel's centre (model metres)
-                    if (p.center) m.t = {0, 0, -0.0005f * sink};
+                    if (p.center) m.t = {0, 0, -G.sink * sink};
                     if (p.wheel && rock > 0.001f) {
-                        const float ang = -2.5f * kPi / 180 * rock;
+                        const float ang = -G.rockDeg * kPi / 180 * rock;
                         const v3 axis = normalize(v3{std::cos(rockAngle), -std::sin(rockAngle), 0});
                         Pose R = poseFrom(qnorm({std::cos(ang / 2), axis.x * std::sin(ang / 2), axis.y * std::sin(ang / 2), 0}), {});
-                        const v3 pivot = {0, WHEEL_CY, FRONT_Z};
+                        const v3 pivot = {0, G.wheelCy, G.d / 2};
                         R.t = pivot - R.rotate(pivot);
                         m = R;
                     }
@@ -791,9 +921,10 @@ int main(int argc, char **argv) {
                     m.toGL(M);
                     prog.mat4("uModel", M);
                     prog.set("uMat", p.mat);
-                    prog.set("uBase", p.base.x, p.base.y, p.base.z);
+                    if (p.tint) prog.set("uBase", lin(fin.r), lin(fin.g), lin(fin.b));
+                    else prog.set("uBase", p.base.x, p.base.y, p.base.z);
                     glActiveTexture(GL_TEXTURE0);
-                    glBindTexture(GL_TEXTURE_2D, p.tex);
+                    glBindTexture(GL_TEXTURE_2D, p.texId);
                     glBindVertexArray(p.mesh.vao);
                     glDrawArrays(GL_TRIANGLES, 0, p.mesh.count);
                 }
@@ -803,9 +934,20 @@ int main(int argc, char **argv) {
                 id.toGL(M);
                 prog.mat4("uModel", M);
                 prog.set("uMat", 6);
-                glBindVertexArray(window.vao);
-                glDrawArrays(GL_TRIANGLES, 0, window.count);
+                const Mesh &win = nano ? windowNano : windowVideo;
+                glBindVertexArray(win.vao);
+                glDrawArrays(GL_TRIANGLES, 0, win.count);
             }
+        }
+        if (debugMode == "dot") {
+            const Face &F = L.f[0];
+            glEnable(GL_SCISSOR_TEST);
+            glClearColor(1, 1, 1, 1);
+            for (int eye = 0; eye < 2; eye++) {
+                glScissor(F.tx + eye * (F.tw + 2 * SPAN) + F.tw / 2 - 4, F.ty + F.th / 2 - 4, 8, 8);
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
+            glClearColor(0, 0, 0, 0);
         }
         glDisable(GL_SCISSOR_TEST);
         glBindVertexArray(0);
@@ -840,6 +982,28 @@ int main(int argc, char **argv) {
         }
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glFinish();   // SteamVR samples the dmabuf from another process
+        // debugging: the texture as SteamVR gets it, once, when /tmp/lgs/podd-dump.req appears
+        // ("RGBA", u32 width, u32 height, rows as stored: row 0 is the texture's top), with the spec
+        // and the eyes in body space beside it
+        if (access("/tmp/lgs/podd-dump.req", F_OK) == 0) {
+            std::remove("/tmp/lgs/podd-dump.req");
+            std::vector<uint8_t> px(size_t(L.texW) * L.texH * 4);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, B.fbo);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(0, 0, L.texW, L.texH, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+            std::string d = "RGBA";
+            uint32_t wh[2] = {uint32_t(L.texW), uint32_t(L.texH)};
+            d.append(reinterpret_cast<const char *>(wh), 8);
+            d.append(reinterpret_cast<const char *>(px.data()), px.size());
+            writeAtomic("/tmp/lgs/podd-dump.rgba", d);
+            std::string eyes;
+            for (int eye = 0; eye < 2; eye++) {
+                const Pose e2h = fromVR(vr::VRSystem()->GetEyeToHeadTransform(eye ? vr::Eye_Right : vr::Eye_Left));
+                const v3 eb = toBody.apply((hmd * e2h).t);
+                eyes += std::string(eye ? ", " : "") + "[" + std::to_string(eb.x) + ", " + std::to_string(eb.y) + ", " + std::to_string(eb.z) + "]";
+            }
+            writeAtomic("/tmp/lgs/podd-dump.json", "{\"eyes\": [" + eyes + "], \"model\": \"" + spec.model + "\"}\n");
+        }
         vr::SharedTextureHandle_t h = vr::SharedTextureHandle_t(B.vrHandle);
         vr::Texture_t tex = {&h, vr::TextureType_SharedTextureHandle, vr::ColorSpace_Gamma};
         auto e = vr::VROverlay()->SetOverlayTexture(ov, &tex);

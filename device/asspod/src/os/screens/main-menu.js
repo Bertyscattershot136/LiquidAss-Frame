@@ -4,6 +4,7 @@
 import { createRng, hashString } from '../../util/rng.js';
 import { createSettings } from './settings.js';
 import { createSearch } from './search.js';
+import { MODELS, MODEL_ORDER, currentModel, currentFinish } from '../../models.js';
 
 // ---------------------------------------------------------------- sorting
 
@@ -32,7 +33,9 @@ function albumOrder(library) {
  * A list of songs (or videos, in playlists). Selecting row i plays the whole list from i,
  * the way the assPod queues whatever list you picked from, then opens Now Playing.
  */
-export function songList(ctx, id, title, list) {
+export function songList(ctx, id, title, all) {
+  // the nano plays no video: a playlist's videos are left out on it
+  const list = currentModel(ctx.settings).videos ? all : all.filter((t) => t.kind !== 'video');
   const items = list.map((t, i) => ({
     label: t.title,
     speaker: () => ctx.player.current?.id === t.id && ctx.player.state !== 'stopped',
@@ -170,30 +173,83 @@ function shuffleSongs(ctx) {
   return true;
 }
 
+// ---------------------------------------------------------------- the body: model and colour
+
+/** assPod Model: the Video or the nano, checkmarked; picking one switches the body and goes back.
+ *  The nano plays no video: a video playing stops when it is picked. */
+function modelMenu(ctx) {
+  return ctx.menu({
+    id: 'model',
+    title: 'assPod Model',
+    initialIndex: () => Math.max(0, MODEL_ORDER.indexOf(currentModel(ctx.settings).id)),
+    items: MODEL_ORDER.map((id) => ({
+      label: MODELS[id].label,
+      check: () => currentModel(ctx.settings).id === id,
+      action: (c) => {
+        if (!MODELS[id].videos && c.player.current?.kind === 'video') c.player.stop();
+        c.settings.set('model', id);
+        c.pop();
+        return true;
+      },
+    })),
+  });
+}
+
+/** Color: the current body's own finishes, checkmarked. */
+function colorMenu(ctx) {
+  const m = currentModel(ctx.settings);
+  return ctx.menu({
+    id: 'color',
+    title: 'Color',
+    initialIndex: () => Math.max(0, m.finishes.findIndex(([k]) => k === currentFinish(ctx.settings))),
+    items: m.finishes.map(([key, label]) => ({
+      label,
+      check: () => currentFinish(ctx.settings) === key,
+      action: (c) => {
+        c.settings.set(m.finishKey, key);
+        c.pop();
+        return true;
+      },
+    })),
+  });
+}
+
+// ---------------------------------------------------------------- main menu
+
 export function createMainMenu(ctx) {
-  const base = [
+  const finishLabel = () => {
+    const m = currentModel(ctx.settings);
+    const f = currentFinish(ctx.settings);
+    return (m.finishes.find(([k]) => k === f) || m.finishes[0])[1];
+  };
+  const all = [
     { id: 'music', label: 'Music', open: createMusicMenu },
     { id: 'videos', label: 'Videos', open: (c) => c.apps.videos(c) },
     { id: 'extras', label: 'Extras', open: (c) => c.apps.extras(c) },
     { id: 'settings', label: 'Settings', open: createSettings },
     { id: 'reposition', label: 'Reposition', open: (c) => c.apps.reposition(c) },
-    {
-      id: 'color',
-      label: 'Color',
-      detail: () => (ctx.settings.get('finish') === 'white' ? 'White' : 'Black'),
-      action: (c) => { c.settings.set('finish', c.settings.get('finish') === 'white' ? 'black' : 'white'); return true; },
-    },
+    { id: 'model', label: 'assPod Model', detail: () => currentModel(ctx.settings).label, open: modelMenu },
+    { id: 'color', label: 'Color', detail: finishLabel, open: colorMenu },
     { id: 'shuffle', label: 'Shuffle Songs', action: shuffleSongs },
     { id: 'backlight', label: 'Backlight', action: (c) => { c.os.toggleBacklight(); return false; } },
   ];
-  const withNowPlaying = [
-    ...base,
-    { id: 'nowplaying', label: 'Now Playing', chevron: true, action: (c) => { c.nowPlaying(); return true; } },
-  ];
+  const nowPlaying = { id: 'nowplaying', label: 'Now Playing', chevron: true, action: (c) => { c.nowPlaying(); return true; } };
+  // the same item objects every time, so the menu keeps its place across a model switch
+  const lists = new Map();
   return ctx.menu({
     id: 'main',
     title: 'assPod',
-    // Like the 5G, Now Playing is listed only while something is queued (not after the queue ends).
-    items: () => (ctx.player.current && ctx.player.state !== 'stopped' ? withNowPlaying : base),
+    // Like the 5G, Now Playing is listed only while something is queued (not after the queue ends);
+    // the nano has no Videos.
+    items: () => {
+      const videos = currentModel(ctx.settings).videos;
+      const playing = !!(ctx.player.current && ctx.player.state !== 'stopped');
+      const key = `${videos}|${playing}`;
+      if (!lists.has(key)) {
+        const base = videos ? all : all.filter((it) => it.id !== 'videos');
+        lists.set(key, playing ? [...base, nowPlaying] : base);
+      }
+      return lists.get(key);
+    },
   });
 }

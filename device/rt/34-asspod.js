@@ -7,9 +7,10 @@
      device/vr/systemui.asspod.js), with the menu dimmed behind it.
    - While it is out (the daemon's bridge value 'asspod' {open, at, ttlMs}, renewed while it stays
      out): every gamepad input Steam gets is swallowed (FocusNavController's catch-all), so the
-     sticks and buttons drive only the assPod. A (OK, or the left controller's button in that place,
-     DIR_DOWN), B (CANCEL, or DIR_LEFT) and the hamburger (START) go to the daemon as asspod.btn: A is
-     the centre button, B the wheel's Menu, the hamburger puts the assPod away. The Steam /
+     sticks and buttons drive only the assPod. A (OK), B (CANCEL) and the hamburger (START) go to the
+     daemon as asspod.btn: A is the centre button, B the wheel's Menu, the hamburger puts the assPod
+     away. The d-pad directions are not relayed: Steam sends them for the left stick's tilts too, and
+     both sticks reach the wheel from their controller models (device/asspod/src/input). The Steam /
      quick-access buttons pass. Steam's windows also take no laser clicks meanwhile
      (html.lgs-asspod-out, theme/34-asspod.css). A bridge value older
      than its ttl ends all of this on its own, so a dead daemon never leaves Steam's input taken.
@@ -29,10 +30,10 @@ __LGS_RT.define({
     if (!R.patch.targets.dashboardBar) throw new Error('asspod: no dashboardBar target');
 
     // Steam's gamepad buttons (EGamepadButton)
-    const BTN = { OK: 1, CANCEL: 2, DIR_DOWN: 10, DIR_LEFT: 11, START: 14, STEAM_GUIDE: 27, STEAM_QUICK_MENU: 28 };
-    // button -> [what it does, which controller]
-    const MAP = { [BTN.OK]: ['ok', 'right'], [BTN.CANCEL]: ['menu', 'right'], [BTN.DIR_DOWN]: ['ok', 'left'],
-      [BTN.DIR_LEFT]: ['menu', 'left'], [BTN.START]: ['close', 'right'] };
+    const BTN = { OK: 1, CANCEL: 2, START: 14, STEAM_GUIDE: 27, STEAM_QUICK_MENU: 28 };
+    // button -> [what it does, which controller]. No d-pad directions: tilting the left stick sends
+    // them too, and pressed the centre button (down) or Menu (left).
+    const MAP = { [BTN.OK]: ['ok', 'right'], [BTN.CANCEL]: ['menu', 'right'], [BTN.START]: ['close', 'right'] };
     const OUT_CLASS = 'lgs-asspod-out';
     const ICON = jsx('svg', { viewBox: '0 0 24 24', fill: 'currentColor', 'aria-hidden': 'true', children: [
       jsx('path', { d: 'M9 3.6 20 1.4v14.1a3.4 3.4 0 1 1-2-3.1V6.3L11 7.7v10.1A3.4 3.4 0 1 1 9 14.7z' }, 'n'),

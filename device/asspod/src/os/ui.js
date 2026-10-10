@@ -171,7 +171,7 @@ function drawBattery(g, x, y) {
   g.lineWidth = 1;
   roundRectPath(g, 0.5, 0.5, 23, 10, 1.5);
   g.stroke();
-  // Terminal nub, 2x5 at x = 311.
+  // Terminal nub, 2x5 at the body's right.
   g.fillStyle = C.batteryBorder;
   g.fillRect(24, 3, 2, 5);
   g.restore();
@@ -189,7 +189,7 @@ export function drawStatusBar(g, s) {
   g.fillStyle = C.statusLine;
   g.fillRect(0, M.statusH - 1, M.W, 1);
 
-  const title = ellipsize(g, s.title ?? '', FONTS.title, 220);
+  const title = ellipsize(g, s.title ?? '', FONTS.title, M.W - 100);
   g.font = FONTS.title;
   g.textAlign = 'center';
   g.textBaseline = 'alphabetic';
@@ -200,7 +200,7 @@ export function drawStatusBar(g, s) {
 
   if (s.play === 'playing' || s.play === 'paused') drawPlayIcon(g, 8, ICON_Y, s.play);
   if (s.locked) drawLock(g, 22, 5);
-  drawBattery(g, 287, ICON_Y);
+  drawBattery(g, M.W - 33, ICON_Y);
   g.restore();
 }
 
