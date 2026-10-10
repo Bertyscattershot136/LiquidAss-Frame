@@ -1,6 +1,6 @@
 <p align="center"><img src="assets/icon.png" alt="LiquidAss icon" width="160"></p>
 
-# LiquidAss: Liquid Glass for the Steam Frame's VR interface
+# LiquidAss: Liquid Glass Theme and Virtual Music Player for Steam Frame
 
 LiquidAss re-skins the Steam Frame's VR UI in Apple's glass design language. AI assisted.
 
