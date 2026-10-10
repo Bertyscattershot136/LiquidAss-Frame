@@ -6,7 +6,7 @@ dashboard, bar, popups, keyboard, toasts) on or off. The theme is injected
 into the running Steam client over its local devtools socket and is never
 written anywhere persistent: restarting Steam or rebooting restores stock.
 
-usage: lgs [toggle|on|off|reload|status|dial 0..1|toast TEXT|flags ...|check]
+usage: lgs [toggle|on|off|reload|status|pod|dial 0..1|toast TEXT|flags ...|check]
            [--quiet] [--native|--css] [--flags a,b=v] [--no-rt]
 
   toggle   on if off, off if on (what the "+ > Launch Program" entry runs)
@@ -23,6 +23,12 @@ usage: lgs [toggle|on|off|reload|status|dial 0..1|toast TEXT|flags ...|check]
   reload   re-read theme/*.css and the runtime and swap them in without a toast
   status   print what is applied, module states, and any theme tokens that
            did not resolve
+  pod      take out the assPod (what "+ > Launch Program > AssPod" runs). With
+           the theme on, the bar's music note does the same. With it off, only
+           the assPod's runtime modules go into Steam (rt.podOnly) and lgs-shell
+           starts in pod mode (lgs_shell.py --pod: no theme, the assPod's page
+           script only), which ends itself once the assPod is away and nothing
+           plays. lgs on replaces both with the full theme
   dial V   transparency dial, 0 = clearest .. 1 = most opaque (default 0.5);
            remembered for the next "on", applied now if the theme is on
   flags    print the effective runtime flags and where each comes from
@@ -630,20 +636,26 @@ def _carried():
 
 
 _RT_EXTRA = []   # [(label, source)] extra module sources: selftest fixtures only (RT-2)
+POD_RT_FILES = ("rt/02-react.js", "rt/34-asspod.js")   # `lgs pod` with the theme off: the assPod and its deps
 
 
-async def rt_load(s, cli_flags=None, version=None):
+async def rt_load(s, cli_flags=None, version=None, pod=False):
     """Boot 00-rt.js, load every module file (one evaluation each, so a syntax
-    error fails only that file), then start(). Returns a short summary."""
+    error fails only that file), then start(). Returns a short summary.
+    pod=True: the core, device/shared and POD_RT_FILES only, booted podOnly
+    (no liveness watch on the CSS core; `lgs pod` with the theme off)."""
     files = rt_sources()
     if not files or files[0][0] != "rt/00-rt.js":
         return {"runtime": "off", "reason": "device/rt/00-rt.js is missing"}
+    if pod:
+        files = [f for f in files if f[0] == "rt/00-rt.js" or f[0].startswith("shared/") or f[0] in POD_RT_FILES]
     layers = flag_layers(cli_flags)
     data, data_errors = rt_data()
     cfg = {"builtin": layers["builtin"], "defaults": layers["defaults"], "session": layers["session"],
            "cli": layers["cli"], "version": version, "files": [f for f, _ in files], "data": data,
-           "test": _carried()}
-    _TEST_CARRY.update(t=0, state=None)
+           "test": None if pod else _carried(), "podOnly": bool(pod)}
+    if not pod:
+        _TEST_CARRY.update(t=0, state=None)
     t0 = time.time()
     boot = (f"(() => {{\nconst __LGS_RT_CONFIG = {json.dumps(cfg)};\n{_read(files[0][1])}\n}})()\n"
             "//# sourceURL=lgs/rt/00-rt.js")
@@ -652,7 +664,7 @@ async def rt_load(s, cli_flags=None, version=None):
         return {"runtime": "off", "reason": "00-rt.js did not define __LGS_RT"}
     for label, msg in data_errors:
         await s.eval(f"window.__LGS_RT._fail({json.dumps(label)}, {json.dumps(msg)})", 10)
-    todo = [(label, path, None) for label, path in files[1:]] + [(label, None, src) for label, src in _RT_EXTRA]
+    todo = [(label, path, None) for label, path in files[1:]] +         ([] if pod else [(label, None, src) for label, src in _RT_EXTRA])
     for label, path, src in todo:
         if src is None:
             try:
@@ -2274,6 +2286,62 @@ def is_on():
     return bool(st and st.get("enabled"))
 
 
+POD_WAIT_S = 30        # `lgs pod`: how long the pod daemon may take to offer asspod.open
+POD_RT_JS = ("(() => { const r = window.__LGS_RT; if (!r) return 'none';"
+             " return (r.podOnly ? 'pod' : 'full') + (r.has && r.has('asspod') ? '+asspod' : ''); })()")
+POD_READY_JS = ("(() => { const r = window.__LGS_RT; if (!r || !r.bridge) return false;"
+                " const d = r.bridge.get('daemon'); return !!(d && typeof d.at === 'number'"
+                " && Date.now() - d.at <= (d.ttlMs || 6000) && Array.isArray(d.actions)"
+                " && d.actions.includes('asspod.open') && typeof window.lgsAction === 'function'); })()")
+POD_OPEN_JS = ("(async () => { const r = window.__LGS_RT;"
+               " if (!r || !r.has('asspod')) return JSON.stringify({ok: false, error: 'no-asspod'});"
+               " return JSON.stringify(await r.action('asspod.open', {}, {src: 'bar', timeoutMs: 45000})); })()")
+
+
+def pod():
+    """lgs pod: the assPod out in the hand that launched it, with or without the theme."""
+    import lgs_shell
+    out = {"theme": is_on()}
+
+    async def go(s):
+        o = {}
+        cur = await s.eval(POD_RT_JS, 10)
+        if not out["theme"] and cur != "pod+asspod":
+            # theme off: the assPod's own runtime (a full one left over is replaced; a pod one that lost
+            # its module is reloaded)
+            if cur != "none":
+                o["rtOff"] = await rt_teardown(s, "lgs pod")
+            o["runtime"] = await rt_load(s, pod=True)
+            cur = await s.eval(POD_RT_JS, 10)
+        o["rt"] = cur
+        return o
+
+    out.update(asyncio.run(_session(go)))
+    if not str(out.get("rt", "")).endswith("+asspod"):
+        out.update(ok=False, error="the assPod module is not running in Steam (flag assPod off, or it failed)")
+        return out
+    if not out["theme"]:
+        out["shell"] = lgs_shell.start(native="off", pod=True)
+
+    async def wait_open(s):
+        t0 = time.time()
+        while not await s.eval(POD_READY_JS, 10):
+            if time.time() - t0 > POD_WAIT_S:
+                return {"ok": False, "error": f"no daemon offering asspod.open after {POD_WAIT_S} s"}
+            await asyncio.sleep(0.5)
+        while True:
+            r = _jsonish(await s.eval(POD_OPEN_JS, 50))
+            # a new pod daemon offers asspod.open a moment before its page script is in SteamVR's systemui
+            if not (isinstance(r, dict) and r.get("ok") is False and "not installed" in str(r.get("detail"))) \
+                    or time.time() - t0 > POD_WAIT_S:
+                return r
+            await asyncio.sleep(1.0)
+
+    out["open"] = asyncio.run(_session(wait_open))
+    out["ok"] = bool(isinstance(out["open"], dict) and out["open"].get("ok"))
+    return out
+
+
 LAB_LOCK = "/tmp/lgs/lab.lock"
 CLI_LOCK_WAIT_S = 90
 
@@ -2362,7 +2430,7 @@ def main(argv):
         return 0 if res["ok"] else 1
     if cmd == "selftest":
         return selftest_main(args[1:], opts)
-    held = _cli_lab_lock() if cmd in ("toggle", "on", "off", "reload", "dial") else None
+    held = _cli_lab_lock() if cmd in ("toggle", "on", "off", "reload", "dial", "pod") else None
     try:
         if cmd == "toggle":
             cmd = "off" if is_on() else "on"
@@ -2389,6 +2457,8 @@ def main(argv):
                 res["flagsFile"] = "cleared"
         elif cmd == "status":
             res = op("status", vr=True)
+        elif cmd == "pod":
+            res = pod()
         else:
             print(__doc__)
             return 2

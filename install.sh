@@ -11,6 +11,8 @@
 #            add "LiquidAss" to + > Launch Program. Running it again updates.
 #            The assPod (the music note on the bar) plays through VLC: when VLC
 #            is missing, it offers to install it (Flathub, for this user only).
+#            With VLC in place it also adds "AssPod" to + > Launch Program,
+#            which takes out the assPod with or without the theme.
 # uninstall  turn the theme off, remove the launcher entry, the files and
 #            your saved glass settings.
 #
@@ -26,6 +28,7 @@ ASSET=LiquidAss-Frame.tar.gz
 DEST=$HOME/.local/share/glass-shell
 APPS=$HOME/.local/share/applications
 DESKTOP=$APPS/glass-shell.desktop
+POD_DESKTOP=$APPS/asspod.desktop
 CONF=${XDG_CONFIG_HOME:-$HOME/.config}/glass-shell
 
 say() { printf '%s\n' "LiquidAss: $*"; }
@@ -117,6 +120,19 @@ install_app() {
     fi
 }
 
+# + > Launch Program > AssPod: added once the assPod can play (VLC is there), removed when it cannot.
+pod_launcher() {
+    if has_vlc && [ -f "$DEST/device/asspod.desktop" ]; then
+        mkdir -p "$APPS"
+        sed -e "s|/home/steamos/.local/share/glass-shell|$DEST|g" "$DEST/device/asspod.desktop" > "$POD_DESKTOP"
+        chmod 644 "$POD_DESKTOP"
+        say "added AssPod to + > Launch Program (it works with the theme on or off)"
+    else
+        rm -f "$POD_DESKTOP"
+    fi
+    update-desktop-database "$APPS" >/dev/null 2>&1 || true
+}
+
 # VLC for the assPod: found (a system vlc or the Flathub app), or offered.
 has_vlc() {
     command -v vlc >/dev/null 2>&1 && return 0
@@ -162,14 +178,14 @@ uninstall_app() {
     if [ -f "$DEST/device/lgs.py" ] && command -v python3 >/dev/null 2>&1; then
         py "$DEST/device/lgs.py" off --quiet >/dev/null 2>&1 || true
     fi
-    rm -f "$DESKTOP"
+    rm -f "$DESKTOP" "$POD_DESKTOP"
     update-desktop-database "$APPS" >/dev/null 2>&1 || true
     rm -rf "$DEST" "$DEST.old" /tmp/lgs "$CONF"
     say "removed"
 }
 
 case "${1:-install}" in
-    install) install_app; check_vlc ;;
+    install) install_app; check_vlc; pod_launcher ;;
     uninstall) uninstall_app ;;
     -h|--help|help) sed -n '2,20p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true ;;
     *) die "unknown command '$1' (use install or uninstall)" ;;
