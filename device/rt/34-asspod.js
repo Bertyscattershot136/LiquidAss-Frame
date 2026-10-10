@@ -14,7 +14,10 @@
      quick-access buttons pass. Steam's windows also take no laser clicks meanwhile
      (html.lgs-asspod-out, theme/34-asspod.css). A bridge value older
      than its ttl ends all of this on its own, so a dead daemon never leaves Steam's input taken.
-   remove(): the patch layer, the catch-all and the class go. */
+   - Pod only (`lgs pod` with the theme off, rt.podOnly; + > Launch Program > AssPod): no button on
+     Steam's own bar, and no theme CSS, so the fade and the click block of html.lgs-asspod-out come
+     from a small style of this module's own in each window. The rest is the same.
+   remove(): the patch layer, the catch-all, the class and the style go. */
 let ASSPOD = null;
 __LGS_RT.define({
   name: 'asspod',
@@ -22,12 +25,12 @@ __LGS_RT.define({
   flag: 'assPod',
   install(rt) {
     const R = rt.react;
-    R.ready();
-    const { React, jsx } = R;
-    const c = R.c || {};
-    const Focusable = c.Focusable || R.Focusable;
-    if (!Focusable) throw new Error('asspod: no Focusable');
-    if (!R.patch.targets.dashboardBar) throw new Error('asspod: no dashboardBar target');
+    const podOnly = !!rt.podOnly;
+    if (!podOnly) {
+      R.ready();
+      if (!(R.c && R.c.Focusable) && !R.Focusable) throw new Error('asspod: no Focusable');
+      if (!R.patch.targets.dashboardBar) throw new Error('asspod: no dashboardBar target');
+    }
 
     // Steam's gamepad buttons (EGamepadButton)
     const BTN = { OK: 1, CANCEL: 2, START: 14, STEAM_GUIDE: 27, STEAM_QUICK_MENU: 28 };
@@ -35,7 +38,9 @@ __LGS_RT.define({
     // them too, and pressed the centre button (down) or Menu (left).
     const MAP = { [BTN.OK]: ['ok', 'right'], [BTN.CANCEL]: ['menu', 'right'], [BTN.START]: ['close', 'right'] };
     const OUT_CLASS = 'lgs-asspod-out';
-    const ICON = jsx('svg', { viewBox: '0 0 24 24', fill: 'currentColor', 'aria-hidden': 'true', children: [
+    const POD_STYLE = `body { transition: opacity 300ms ease; }
+    html.${OUT_CLASS} body { opacity: 0 !important; pointer-events: none !important; }`;
+    const icon = (jsx) => jsx('svg', { viewBox: '0 0 24 24', fill: 'currentColor', 'aria-hidden': 'true', children: [
       jsx('path', { d: 'M9 3.6 20 1.4v14.1a3.4 3.4 0 1 1-2-3.1V6.3L11 7.7v10.1A3.4 3.4 0 1 1 9 14.7z' }, 'n'),
     ] });
 
@@ -86,8 +91,20 @@ __LGS_RT.define({
     };
     S.off.push(rt.bridge.on('asspod', () => { if (S.timer) { S.timer(); S.timer = 0; } check(); }));
     S.off.push(rt.windows.track((e) => {
-      try { e.doc.documentElement.classList.toggle(OUT_CLASS, S.out); } catch (_) { /* window gone */ }
-      return () => { try { e.doc.documentElement.classList.remove(OUT_CLASS); } catch (_) { /* gone */ } };
+      let style = null;
+      try {
+        e.doc.documentElement.classList.toggle(OUT_CLASS, S.out);
+        if (podOnly) {
+          style = e.doc.createElement('style');
+          style.className = 'lgs-asspod-style';
+          style.textContent = POD_STYLE;
+          (e.doc.head || e.doc.documentElement).appendChild(style);
+        }
+      } catch (_) { /* window gone */ }
+      return () => {
+        try { e.doc.documentElement.classList.remove(OUT_CLASS); } catch (_) { /* gone */ }
+        try { if (style) style.remove(); } catch (_) { /* gone */ }
+      };
     }));
 
     const daemon = () => {
@@ -107,7 +124,18 @@ __LGS_RT.define({
       });
     };
 
+    const api = {
+      status: () => ({ out: S.out, opening: S.opening, daemon: daemon(), sent: S.sent, swallowed: S.swallowed, lastErr: S.lastErr,
+        podOnly, bridge: rt.bridge.get('asspod') || null, patch: S.handle ? { count: S.handle.count, live: S.handle.live } : null,
+        shown: (() => { try { return rt.windows.byKind('bar').some((e) => !!e.doc.querySelector('.lgs-asspod')); } catch (_) { return null; } })() }),
+      open,
+    };
+    if (podOnly) { check(); return api; }
+
     // ---- the button: Steam's small bar disc in a glass circle of its own
+    const { React, jsx } = R;
+    const Focusable = (R.c && R.c.Focusable) || R.Focusable;
+    const ICON = icon(jsx);
     const barClasses = () => (R.M && R.M.BarClasses) || {};
     function AssPodButton() {
       const [, bump] = React.useState(0);
@@ -156,13 +184,7 @@ __LGS_RT.define({
     }, { optional: true });
     try { R.patch.rerender(S.handle); } catch (_) { /* shows at the bar's next render */ }
     check();
-
-    return {
-      status: () => ({ out: S.out, opening: S.opening, daemon: daemon(), sent: S.sent, swallowed: S.swallowed, lastErr: S.lastErr,
-        bridge: rt.bridge.get('asspod') || null, patch: S.handle ? { count: S.handle.count, live: S.handle.live } : null,
-        shown: (() => { try { return rt.windows.byKind('bar').some((e) => !!e.doc.querySelector('.lgs-asspod')); } catch (_) { return null; } })() }),
-      open,
-    };
+    return api;
   },
   remove() {
     const S = ASSPOD;

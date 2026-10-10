@@ -35,6 +35,14 @@ In both modes it also (docs/phase2/contracts/daemon.md):
   - injects SteamVR page scripts device/vr/<page>.<name>.js and removes them
     again.
 
+Pod mode (--pod, what `lgs pod` starts while the theme is off; + > Launch
+Program > AssPod): no theme anywhere. SteamVR's pages are not themed, only
+the assPod's page script goes in, Steam runs only the assPod's runtime
+modules (rt.podOnly, loaded by lgs pod), and a theme that is off is not a
+reason to go dormant. It exits once the assPod has been away with nothing
+playing for POD_IDLE_S, at once after a Steam restart, and on lgs on (which
+starts a full unit in its place) or lgs off.
+
 Nothing persists: the unit is transient (systemd-run --collect) and writes no
 bytecode (python3 -B); lgs off stops it at once. A theme off without lgs off
 (a lab --stock step) makes it dormant: native layer, glassd, reporter and scene
@@ -45,7 +53,7 @@ class, binding global and file it made. If it dies without cleaning up,
 lgs-native clears itself within 3 s and the scene-graph nodes within 12 s
 (heartbeat watchdogs).
 
-  lgs_shell.py start [--native|--css|--auto] [--glassd PATH|none]
+  lgs_shell.py start [--native|--css|--auto|--pod] [--glassd PATH|none]
                      [--glassd-args "ARGS"] [--feed] [--stay]
                      [--test-report PATH] [--assume-caps CAPS]
                                             start the unit; lgs on does this.
@@ -152,6 +160,11 @@ SLAB_SIZE_TOL_PX = 2.5             # glassd slab vs element x backdropScale
 THEME_OFF_POLLS = 3                # Steam theme seen off this many polls (1 s) -> dormant (or exit)
 THEME_OFF_GRACE_S = 600            # ... dormant this long before exiting (flag shellThemeGraceS; 0 = exit)
 STAY_MAX_S = 2400                  # --stay: dormant at most this long, and native at most this long after start
+POD_SCRIPTS = ("asspod",)          # --pod: the only SteamVR page scripts it installs
+POD_IDLE_S = 30.0                  # --pod: exit once the assPod is away and nothing plays this long
+POD_FIRST_OPEN_S = 90.0            # --pod: ... or when it was never taken out this long after start
+POD_RT_TEARDOWN_JS = ("(async () => { const r = window.__LGS_RT; if (!r || !r.podOnly || typeof r.teardown !== 'function')"
+                      " return 'absent'; await r.teardown('pod daemon exit'); return 'removed'; })()")
                                    # (glass.py's native-session client gives up after 2400 s; a unit older than
                                    # that has lost its client, e.g. a usage-limit cut-off)
 STEAM_GONE_S = 120                 # Steam's devtools unreachable this long -> exit (also with --stay)
@@ -916,7 +929,10 @@ def clean_quad(q):
 
 class Shell:
     def __init__(self, glassd_path, stay=False, glassd_args=None, native=False, native_req=None, native_src=None,
-                 test_report=None, assume_caps=None):
+                 test_report=None, assume_caps=None, pod=False):
+        self.pod = bool(pod)                  # pod mode: the assPod alone, no theme (lgs pod)
+        if self.pod:
+            native = False
         self.glassd_path = glassd_path
         self.glassd_args = list(glassd_args or [])
         self.stay = stay                      # lab aid: go dormant instead of exiting on theme off
@@ -1101,6 +1117,8 @@ class Shell:
 
     # ---------------------------------------------------------------- state
     def mode(self):
+        if self.pod:
+            return "pod"
         if self.dormant_since is not None:     # theme off without lgs off: waiting for it (contract §1)
             return "dormant"
         if not self.native_enabled:
@@ -1364,7 +1382,7 @@ class Shell:
         rep = self.current_report() or {}
         return {
             "pid": os.getpid(), "since": time.strftime("%H:%M:%S", time.localtime(self.since)),
-            "updated": time.time(), "mode": self.mode(),
+            "updated": time.time(), "mode": self.mode(), "pod": self.pod,
             "native": {"requested": self.native_req, "resolved": "on" if self.native_requested else "off",
                        "source": self.native_src, "enabled": self.native_enabled, "reason": self.css_reason},
             "flags": self.rt_flags, "profile": self.profile, "reduceMotion": self.reduce_motion,
@@ -2214,7 +2232,7 @@ class Shell:
                                 self.native_force, self.bridge_sent = True, {}
                                 self.changed.set()
                         self.check_stay_limit()
-                        if self.theme_off_polls >= THEME_OFF_POLLS:
+                        if self.theme_off_polls >= THEME_OFF_POLLS and not self.pod:   # pod: no theme, by design
                             # A theme off without `lgs off` (which stops us first) is a
                             # test toggling it (lab --stock, P1's selftests) or a Steam
                             # restart: stay dormant for the grace, exit on a restart.
@@ -3116,6 +3134,22 @@ class Shell:
                     self.vr_targets = {}
                     await self.vr_conns_close()
                     continue
+                if self.pod:                 # no page theming: the assPod's page script only
+                    self.vr_targets = {(t.get("title") or t.get("url")): t for t in ts}
+                    scripts = {n: v for n, v in self.vr_scripts_cached().items() if n in POD_SCRIPTS}
+                    await self.vr_conns_close(keep={t.get("id") or t["webSocketDebuggerUrl"] for t in ts})
+                    pages = {}
+                    for t in ts:
+                        name = t.get("title") or t.get("url")
+                        try:
+                            await self.vr_scripts_for(t, scripts)
+                            pages[name] = "pod"
+                        except Exception:  # noqa: BLE001 - page reloading or closing
+                            pages[name] = "error"
+                    self.vr_pages = pages
+                    for gone in [n for n in self.vrx_status if n not in pages]:
+                        del self.vrx_status[gone]
+                    continue
                 s = lgs_vr.signature()
                 if s != sig:
                     sig = s
@@ -3148,6 +3182,37 @@ class Shell:
                 raise
             except Exception as e:  # noqa: BLE001 - best effort, like lgs-vr
                 self.note(f"vr: {e!r}")
+
+    # ---------------------------------------------------------------- pod mode
+    async def pod_loop(self):
+        """--pod: end once the assPod is away and nothing plays (POD_IDLE_S), when it was never taken out
+        (POD_FIRST_OPEN_S), or at once after a Steam restart (its pod runtime went with the old page)."""
+        opened, idle_since = False, None
+        while not self.stopping:
+            await asyncio.sleep(1.0)
+            if self.steam_restarted:
+                log("pod: Steam restarted; exiting")
+                self.request_stop("pod: steam restarted", strip_vr=True)
+                return
+            p = self.registry.plugins.get("asspod") or {}
+            st = p["ctx"].state if p.get("ctx") is not None else {}
+            busy = bool(st.get("open") or st.get("playing") or st.get("starting"))
+            opened = opened or bool(st.get("open"))
+            now = time.time()
+            if busy:
+                idle_since = None
+                continue
+            if not opened:
+                if now - self.since >= POD_FIRST_OPEN_S:
+                    log(f"pod: the assPod was not taken out within {POD_FIRST_OPEN_S:.0f} s; exiting")
+                    self.request_stop("pod: never opened", strip_vr=True)
+                    return
+                continue
+            idle_since = idle_since or now
+            if now - idle_since >= POD_IDLE_S:
+                log(f"pod: the assPod has been away with nothing playing for {POD_IDLE_S:.0f} s; exiting")
+                self.request_stop("pod: idle", strip_vr=True)
+                return
 
     # ---------------------------------------------------------------- status
     async def status_loop(self):
@@ -3244,6 +3309,9 @@ class Shell:
                 # the inert binding functions (both: removeBinding leaves them):
                 # gone, so callers see no daemon and nothing of ours stays (G-REMOVE)
                 rb = await s.eval(f"({DELETE_BINDINGS_JS})({json.dumps([BINDING, ACTION_BINDING])})", 5)
+                if self.pod:        # the assPod's own runtime (lgs pod) goes with us; a full one stays
+                    rp = await s.eval(POD_RT_TEARDOWN_JS, 30)
+                    log(f"teardown: pod runtime {rp}")
             finally:
                 await s.close()
             log(f"teardown: lgs-native {r}, reporter {rr}, binding globals deleted [{rb}]")
@@ -3271,14 +3339,16 @@ class Shell:
         for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
             loop.add_signal_handler(sig, lambda s=sig: self.request_stop(signal.Signals(s).name))
         os.makedirs(SHM, exist_ok=True)
-        log(f"lgs-shell starting (pid {os.getpid()}, "
-            + (f"native, glassd {self.glassd_path} {' '.join(self.glassd_args)}".rstrip() if self.native_enabled
-               else f"css only: {self.css_reason}") + ")")
+        log(f"lgs-shell starting (pid {os.getpid()}, " + ("pod mode: the assPod alone, no theme" if self.pod else
+            (f"native, glassd {self.glassd_path} {' '.join(self.glassd_args)}".rstrip() if self.native_enabled
+               else f"css only: {self.css_reason}")) + ")")
         self.refresh_flags()
         self.tasks = [loop.create_task(c) for c in (
             self.stall_loop(), self.steam_loop(), self.native_loop(), self.sysui_loop(), self.glassd_loop(),
             self.glassd_out_loop(),
             self.vr_theme_loop(), self.status_loop(), self.geom_loop(), self.actions_loop())]
+        if self.pod:
+            self.tasks.append(loop.create_task(self.pod_loop()))
         pending = set(self.tasks)
         while self.stop_task is None and pending:
             done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
@@ -3412,7 +3482,7 @@ def ensure_glassd(path=GLASSD_BIN):
         return False
 
 
-def start(glassd=GLASSD_BIN, stay=False, glassd_args=None, native=None, test_report=None, assume_caps=None):
+def start(glassd=GLASSD_BIN, stay=False, glassd_args=None, native=None, test_report=None, assume_caps=None, pod=False):
     """Start the unit. Also resumes SteamVR page theming that a lab "--theme
     off" on a vr: page paused.
 
@@ -3423,7 +3493,9 @@ def start(glassd=GLASSD_BIN, stay=False, glassd_args=None, native=None, test_rep
     then defaults.json, else CSS only). A unit that is stopping is waited for
     and then started fresh. stay=True (lab testing only) keeps it running,
     dormant, while the Steam theme is off. test_report (lab) replaces the
-    reporter with a report JSON file.
+    reporter with a report JSON file. pod=True (lgs pod, theme off) runs pod
+    mode: a running pod unit is kept, any other unit is replaced by one; a
+    running pod unit is replaced by a full one for any other request.
 
     Serialized by START_LOCK: two `lgs on` at once (one lock-free) made the
     loser's systemd-run fail with "already loaded" although a unit ran (review
@@ -3436,13 +3508,15 @@ def start(glassd=GLASSD_BIN, stay=False, glassd_args=None, native=None, test_rep
     except (OSError, TimeoutError):
         lk = None
     try:
-        return _start(glassd, stay, glassd_args, native, test_report, assume_caps)
+        return _start(glassd, stay, glassd_args, native, test_report, assume_caps, pod)
     finally:
         if lk is not None:
             lk.__exit__()
 
 
-def _start(glassd, stay, glassd_args, native, test_report, assume_caps):
+def _start(glassd, stay, glassd_args, native, test_report, assume_caps, pod=False):
+    if pod:
+        native = "off"
     req = "auto" if native is None else native_word(native)
     try:
         os.remove(VR_PAUSE)
@@ -3455,18 +3529,22 @@ def _start(glassd, stay, glassd_args, native, test_report, assume_caps):
         return ["--glassd", (glassd if nat and glassd else "none")] + (["--native"] if nat else []) + \
             (["--stay"] if stay else []) + (["--glassd-args", " ".join(glassd_args)] if nat and glassd_args else []) + \
             (["--test-report", os.path.abspath(test_report)] if test_report else []) + \
-            (["--assume-caps", ",".join(assume_caps)] if assume_caps else [])
+            (["--assume-caps", ",".join(assume_caps)] if assume_caps else []) + \
+            (["--pod"] if pod else [])
 
     state, pid = settle()
     if state in ("active", "activating", "reloading"):
         argv = daemon_argv(pid)
         cur = "--native" in argv
+        if pod and "--pod" in argv:
+            return "running (pod)"
+        was_pod = "--pod" in argv
         running = core_args(argv[argv.index("daemon") + 1:]) if "daemon" in argv else None
         # an explicit request restarts a unit that runs differently
         st = read_json(STATUS) or {}
         stay_over = req == "on" and st.get("pid") == pid and \
             str((st.get("native") or {}).get("reason") or "").startswith("--stay limit")
-        if (req == "auto" or running == daemon_args(req == "on")) and not stay_over:
+        if (req == "auto" or running == daemon_args(req == "on")) and not stay_over and not was_pod and not pod:
             if cur and st.get("pid") == pid and not (st.get("native") or {}).get("enabled", True):
                 return f"running (native requested; {st.get('mode')})"
             return "running (native)" if cur else "running (css only)"
@@ -3488,6 +3566,8 @@ def _start(glassd, stay, glassd_args, native, test_report, assume_caps):
                 cur = "--native" in daemon_argv(pid)
                 return "running (native, started concurrently)" if cur else "running (css only, started concurrently)"
         return f"failed: {r.stderr.strip()}"
+    if pod:
+        return "started (pod)"
     if nat and not (glassd and os.access(glassd, os.X_OK)):
         return "started (css only: native requested but no glassd binary)"
     return "started (native)" if nat else "started (css only)"
@@ -4438,8 +4518,8 @@ def main(argv):
                                      native=bool(native_arg(argv)), native_req=opt_arg(argv, "--req"),
                                      native_src=opt_arg(argv, "--src"),
                                      test_report=opt_arg(argv, "--test-report"),
-                                     assume_caps=[c for c in (opt_arg(argv, "--assume-caps") or "").split(",") if c]
-                                     ).run())
+                                     assume_caps=[c for c in (opt_arg(argv, "--assume-caps") or "").split(",") if c],
+                                     pod="--pod" in argv).run())
         except KeyboardInterrupt:
             return 0
     if cmd == "start":
@@ -4452,7 +4532,8 @@ def main(argv):
             gargs = ["--no-feed"]
         print(start(glassd, stay_arg(argv), gargs, None if nat is None or "--auto" in argv else nat,
                     test_report=opt_arg(argv, "--test-report"),
-                    assume_caps=[c for c in (opt_arg(argv, "--assume-caps") or "").split(",") if c]))
+                    assume_caps=[c for c in (opt_arg(argv, "--assume-caps") or "").split(",") if c],
+                    pod="--pod" in argv))
     elif cmd == "stop":
         print(stop())
     elif cmd == "status":

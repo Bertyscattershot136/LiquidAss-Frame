@@ -17,7 +17,7 @@ does.
                                             --glassd-args "...", --feed, --stay) on
   python glass.py install                   sync + add "LiquidAss" to + > Launch Program
   python glass.py uninstall                 theme off, remove launcher and files
-  python glass.py on|off|toggle|reload|status
+  python glass.py on|off|toggle|reload|status|pod
   python glass.py toast "text"
   python glass.py shot SURF NAME [--route R] [--pre JS] [--theme on|off|keep]
                                  [--settle S] [--back]
@@ -76,6 +76,7 @@ ROOT = Path(__file__).resolve().parent
 HELPER = Path.home() / ".claude" / "skills" / "steam-frame-ssh" / "scripts" / "frame_ssh.py"
 REMOTE = "/home/steamos/.local/share/glass-shell"
 DESKTOP = "/home/steamos/.local/share/applications/glass-shell.desktop"
+POD_DESKTOP = "/home/steamos/.local/share/applications/asspod.desktop"   # + > Launch Program > AssPod (VLC there)
 SHOTS = ROOT / "shots"
 # -B and PYTHONDONTWRITEBYTECODE (REQ P8->P10): lab and lgs commands import lgs, lgs_shell, lab_p2cmd; without them
 # Python writes device/__pycache__ and lab/__pycache__ on the Frame, which would outlive `lgs off` and a reboot
@@ -1161,12 +1162,17 @@ def main(argv):
                   f"chmod 755 {REMOTE}/device/lgs {REMOTE}/device/lgs.py && "
                   f"(update-desktop-database ~/.local/share/applications >/dev/null 2>&1 || true) && "
                   f"echo installed {DESKTOP}")
+            # AssPod in + > Launch Program once the assPod can play (install.sh's pod_launcher)
+            sh(c, f"if command -v vlc >/dev/null 2>&1 || flatpak info org.videolan.VLC >/dev/null 2>&1; then "
+                  f"install -Dm644 {REMOTE}/device/asspod.desktop {POD_DESKTOP} && echo installed {POD_DESKTOP}; "
+                  f"else rm -f {POD_DESKTOP}; echo 'no VLC: AssPod launcher skipped'; fi; "
+                  f"(update-desktop-database ~/.local/share/applications >/dev/null 2>&1 || true)")
         elif cmd == "uninstall":
             lgs(c, "off", "--quiet")
-            sh(c, f"rm -f {DESKTOP} && rm -rf {REMOTE} /tmp/lgs \"${{XDG_CONFIG_HOME:-$HOME/.config}}/glass-shell\" "
+            sh(c, f"rm -f {DESKTOP} {POD_DESKTOP} && rm -rf {REMOTE} /tmp/lgs \"${{XDG_CONFIG_HOME:-$HOME/.config}}/glass-shell\" "
                   "&& echo removed")
-        elif cmd in ("on", "off", "toggle", "reload", "status", "toast", "dial"):
-            if cmd in ("on", "reload", "toggle"):
+        elif cmd in ("on", "off", "toggle", "reload", "status", "toast", "dial", "pod"):
+            if cmd in ("on", "reload", "toggle", "pod"):
                 sync(c)
             return lgs(c, cmd, *rest)
         elif cmd == "shot":

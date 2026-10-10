@@ -30,6 +30,9 @@
   const now = () => (W.performance ? W.performance.now() : Date.now());
 
   CONFIG = CONFIG || {};
+  // `lgs pod` with the theme off: only the assPod's modules, kept by the pod daemon (lgs_shell.py --pod),
+  // not by the CSS core, so the liveness watch below never removes it for a missing html.lgs-on.
+  const POD_ONLY = !!CONFIG.podOnly;
 
   // A previous instance (manual re-evaluation): tear it down first. lgs.py
   // already awaits teardown before booting, so this is only a safety net.
@@ -755,7 +758,7 @@
   }
   // true when it started the teardown
   function checkLiveness() {
-    if (!started || stopping) return false;
+    if (!started || stopping || POD_ONLY) return false;
     let on = true, what = 'html.lgs-on gone from main';
     try {
       if (moHtml) on = moHtml.classList.contains('lgs-on');
@@ -1011,6 +1014,7 @@
       runtime: stopped ? 'removed' : (stopping ? 'stopping' : (started ? 'running' : 'loaded')),
       version: VERSION,
       build: CONFIG.version || null,
+      podOnly: POD_ONLY,
       since: new Date(T0).toISOString(),
       modules: list,
       failedLoads: failedLoads.slice(),
@@ -1110,6 +1114,7 @@
   // ------------------------------------------------------------------ public object
   const rt = {
     version: VERSION,
+    podOnly: POD_ONLY,
     W,
     define,
     use(name) {

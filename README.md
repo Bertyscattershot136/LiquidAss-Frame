@@ -50,6 +50,8 @@ Press the paintbrush button at the right end of the dashboard bar. Its panel set
 
 Press the music note button on the dashboard bar, just left of the paintbrush. The assPod appears in the hand you pressed it with.
 
+You can also open it from **+** › **Launch Program** › **AssPod**, and this works whether the LiquidAss theme is on or off. The installer adds that entry once VLC is installed. With the theme off, Steam's UI stays stock. Only the assPod and its player run, and they stop by themselves about 30 seconds after you put the assPod away with nothing playing.
+
 **assPod Model** on its main menu switches the body: **Video Gen 1** (the original) or **Nano Gen 2**, in anodized aluminum with white end caps. The nano has the same menus, laid out for its smaller screen with larger text (six rows, like the real one), and it plays no video. **Color** lists the current body's finishes: Black and White for the Video; Silver, Green, Blue, Pink, Black and (PRODUCT)RED for the nano. The model and colours you pick are kept across launches.
 
 ## Nothing persists
@@ -62,11 +64,12 @@ Press the music note button on the dashboard bar, just left of the paintbrush. T
 
 Nothing starts at boot. There are no systemd units, autostart entries or Steam file patches.
 
-Only two things stay installed, so the toggle is there after a reboot, plus two files of your own:
+Only the launcher entries and the files they run stay installed, so they are there after a reboot, plus two files of your own:
 
 | Path | What it is |
 |---|---|
 | `~/.local/share/applications/glass-shell.desktop` | The "LiquidAss" entry in + › Launch Program |
+| `~/.local/share/applications/asspod.desktop` | The "AssPod" entry in + › Launch Program (only when VLC is installed) |
 | `~/.local/share/glass-shell/` | The toggle script and the theme files it reads |
 | `~/.config/glass-shell/tune.json` | Your glass settings from the paintbrush button on the bar (colour, intensity, refraction, frost, highlights). Written only when you change them; **Reset to default** in that panel deletes it. An exception to "nothing persists", by request |
 | `~/.config/glass-shell/asspod.json` | The assPod model and colours you picked. Written only when you change them. The other exception, by request |
@@ -77,7 +80,7 @@ The [uninstall](#uninstall) command (or `python glass.py uninstall`) removes all
 
 ```bash
 python glass.py install        # copy this checkout to the headset, set up glassd and add the launcher (for development)
-python glass.py on | off | toggle | status
+python glass.py on | off | toggle | status | pod
 python glass.py dial 0.7       # glass intensity: 0 = clearest, 1 = most opaque (saved with your glass settings)
 python glass.py uninstall
 ```

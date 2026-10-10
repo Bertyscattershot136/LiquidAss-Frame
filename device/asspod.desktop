@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=AssPod
+GenericName=assPod music player
+Comment=Take out the assPod, with or without the LiquidAss theme. It plays your music and videos through VLC.
+Exec=/home/steamos/.local/share/glass-shell/device/lgs pod
+Icon=/home/steamos/.local/share/glass-shell/device/asspod/icon.png
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=asspod;music;player;vlc;liquidass;
+StartupNotify=false
