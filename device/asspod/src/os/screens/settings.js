@@ -1,7 +1,9 @@
 // Settings, following the 5G: values cycle in place (Shuffle, Repeat, Clicker),
 // option lists show a checkmark and return to Settings when one is picked (Backlight Timer, EQ),
 // Brightness has its own slider screen, plus About, Date & Time, Legal and Reset Settings.
-// EQ is VLC's own equalizer presets. (The body's colour is on the main menu: Color.)
+// EQ is VLC's own equalizer presets. (The body and its colour are on the main menu: assPod Model, Color.)
+
+import { currentModel } from '../../models.js';
 
 // ---------------------------------------------------------------- option tables
 
@@ -132,22 +134,23 @@ function aboutScreen(ctx) {
   const videos = lib.videos?.length ?? 0;
   const albums = lib.albums?.length ?? 0;
   const secs = (list) => (list ?? []).reduce((s, t) => s + (t.duration || 0), 0);
-  const hours = (secs(lib.tracks) + secs(lib.videos)) / 3600;
+  const hours = (secs(lib.tracks) + (currentModel(ctx.settings).videos ? secs(lib.videos) : 0)) / 3600;
   const info = lib.info || {};
   const lines = [
     ['Songs', songs.toLocaleString('en-US')],
     ['Albums', albums.toLocaleString('en-US')],
-    ['Videos', videos.toLocaleString('en-US')],
+    ...(currentModel(ctx.settings).videos ? [['Videos', videos.toLocaleString('en-US')]] : []),
     ['Playing Time', `${hours.toFixed(1)} h`],
     ['Sources', String((info.sources || []).length)],
     ['Player', 'VLC'],
-    ['Model', 'assPod Video'],
+    ['Model', currentModel(ctx.settings).about],
   ];
   const total = lines.length + 1;   // + the name line
   let first = 0;
   return {
     id: 'about',
     title: 'About',
+    adaptive: true,
     handle(e) {
       if (e.type === 'scroll') {
         const next = Math.max(0, Math.min(total - M.rows, first + e.delta));

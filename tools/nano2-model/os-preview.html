@@ -1,0 +1,87 @@
+<!doctype html>
+<!-- The assPod's OS and face outside SteamVR: the real modules (device/asspod/src) on a made-up
+     library, with a stand-in for VLC, drawn the way main.js draws them (the face canvas the page
+     shows in the hand). For checking the menus and the nano's screen without the headset.
+     Serve the repo root and open /tools/nano2-model/os-preview.html.
+     Keys: up/down scroll, enter select, esc menu, space play/pause, [ ] previous/next. -->
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>assPod OS preview</title>
+<style>
+  :root { --bg: #1b1c1f; --ink: #f5f5f7; --muted: #a1a1a6; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink); font: 13px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { display: flex; gap: 24px; padding: 16px; flex-wrap: wrap; align-items: flex-start; }
+  canvas { background: #2a2b2f; border-radius: 8px; max-width: calc(100vw - 32px); height: auto; }
+  #state { color: var(--muted); white-space: pre; }
+</style>
+</head><body>
+<main>
+  <canvas id="face"></canvas>
+  <div>
+    <p>↑↓ scroll · enter select · esc menu · space play · [ ] prev/next</p>
+    <pre id="state"></pre>
+  </div>
+</main>
+<script type="module">
+import { settings } from '../../device/asspod/src/settings.js';
+import { createOS } from '../../device/asspod/src/os/os.js';
+import { apps } from '../../device/asspod/src/apps/index.js';
+import { createLibrary } from '../../device/asspod/src/media/library.js';
+import { createArt } from '../../device/asspod/src/media/art.js';
+import { createVlcEngine } from '../../device/asspod/src/media/engine.js';
+import { createPlayer } from '../../device/asspod/src/media/player.js';
+import { createFace, BODY } from '../../device/asspod/src/face.js';
+import { SCREEN_W, SCREEN_H, SCREEN_SCALE } from '../../device/asspod/src/config.js';
+import { currentModel, currentFinish } from '../../device/asspod/src/models.js';
+
+const FACE_W = 476;
+const FACE_H = Math.round(FACE_W * BODY.h / BODY.w);
+const faceCanvas = document.getElementById('face');
+faceCanvas.width = FACE_W;
+faceCanvas.height = FACE_H;
+
+const sent = [];
+const library = createLibrary(settings);
+const engine = createVlcEngine({ send: (c) => sent.push(c) });
+const player = createPlayer({ engine, settings });
+let os = null;
+const art = createArt({ library, request: () => {}, onChange: () => os && os.invalidate() });
+const screen = document.createElement('canvas');
+screen.width = SCREEN_W * SCREEN_SCALE;
+screen.height = SCREEN_H * SCREEN_SCALE;
+apps.reposition = () => ({ id: 'reposition', title: 'Reposition', handle: () => undefined, draw(g, r) { g.fillStyle = '#fff'; g.fillRect(r.x, r.y, r.w, r.h); }, highlight: () => null });
+os = createOS({ canvas: screen, player, library, art, apps, settings, boot: false });
+const face = createFace(faceCanvas, screen, { overlay: false });
+
+// a small made-up library: two albums and two videos
+const tracks = [];
+['Peaches', 'Cheek to Cheek', 'Bottoms Up', 'Rear View'].forEach((t, i) => tracks.push({ id: 't' + i, path: `/m/a/${i}.mp3`, title: t, artist: 'The Presidents', album: 'Fruit Bowl', trackNo: i + 1, duration: 180 + i * 7 }));
+['Junk in the Trunk', 'Tail End', 'Back That Up'].forEach((t, i) => tracks.push({ id: 'u' + i, path: `/m/b/${i}.mp3`, title: t, artist: 'Hatchbacks', album: 'Cargo', trackNo: i + 1, duration: 200 + i * 5 }));
+library.load({ tracks, videos: [{ id: 'v0', path: '/v/0.mp4', title: 'Moon Over Miami', category: 'Movies', duration: 5400 }, { id: 'v1', path: '/v/1.mp4', title: 'Rumpus', category: 'Music Videos', duration: 210 }], playlists: [{ id: 'p0', title: 'Mixed', items: ['t0', 'v1', 'u2'] }] });
+
+const t0 = performance.now();
+const now = () => performance.now() - t0;
+let last = now();
+function frame() {
+  const t = now();
+  player.update(Math.min(0.1, (t - last) / 1000));
+  last = t;
+  const dirty = os.render(t);
+  face.draw({ model: currentModel(settings).id, finish: currentFinish(settings), backlight: os.backlight, screenDirty: dirty, touching: false, angle: 0, pressed: null, now: t });
+  document.getElementById('state').textContent = JSON.stringify({ model: settings.get('model'), finish: settings.get('finish'), nanoFinish: settings.get('nanoFinish'),
+    top: os.ctx.top()?.id, player: player.state, current: player.current?.title ?? null, kind: player.current?.kind ?? null }, null, 1);
+  requestAnimationFrame(frame);
+}
+frame();
+
+const ev = (e) => os.handleWheelEvent(e);
+const press = (part) => { ev({ type: 'press', part }); ev({ type: 'release', part, held: false }); };
+addEventListener('keydown', (e) => {
+  const map = { ArrowUp: -1, ArrowDown: 1 };
+  if (e.key in map) { ev({ type: 'scroll', delta: map[e.key] }); e.preventDefault(); return; }
+  const parts = { Enter: 'select', Escape: 'menu', ' ': 'play', '[': 'prev', ']': 'next' };
+  if (parts[e.key]) { press(parts[e.key]); e.preventDefault(); }
+});
+window.harness = { os, settings, player, press, scroll: (d) => ev({ type: 'scroll', delta: d }), library };
+</script>
+</body></html>

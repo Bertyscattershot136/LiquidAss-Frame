@@ -2319,6 +2319,11 @@ __e.drawEdge = drawEdge;
 //
 // The static body is drawn once per finish into a layer; a frame blits it, then the screen and the
 // wheel state. draw() returns false when nothing changed, so the page repaints only on change.
+//
+// The nano (models.js) has only its screen here, in its window, filling most of the canvas: podd or
+// its render models draw the rest, and the page shows just the window's rect (windowRect('nano')).
+
+const { MODELS } = __req('models.js');
 
 const BODY = { w: 61.8, h: 103.5, corner: 6.5 };
 const LCD = { cy: 24.2, w: 50.8, h: 38.1 };
@@ -2367,6 +2372,41 @@ function createFace(canvas, screen, opts = {}) {
 
   const lcd = { x: X(-LCD.w / 2), y: Y(LCD.cy + LCD.h / 2), w: LCD.w * k, h: LCD.h * k };
   const wc = { x: X(0), y: Y(WHEEL.cy) };
+  // the nano's window: 90% of the canvas's width, centred
+  const NANO = MODELS.nano;
+  const nk = W * 0.9 / NANO.win.w;                       // px per mm
+  const nanoWin = { w: NANO.win.w * nk, h: NANO.win.h * nk };
+  nanoWin.x = (W - nanoWin.w) / 2;
+  nanoWin.y = (H - nanoWin.h) / 2;
+  const nanoLcd = { w: NANO.lcd.w * nk, h: NANO.lcd.h * nk };
+  nanoLcd.x = (W - nanoLcd.w) / 2;
+  nanoLcd.y = (H - nanoLcd.h) / 2;
+
+  /** The model's screen window in this canvas (px): what the page shows over the window. */
+  function windowRect(model) {
+    if (model === 'nano') return { ...nanoWin };
+    return { x: X(-WINDOW.w / 2), y: Y(LCD.cy + WINDOW.h / 2), w: WINDOW.w * k, h: WINDOW.h * k };
+  }
+
+  // The nano: its LCD in a black window (rounded like the nano's), the backlight and the glass.
+  function drawNano(s) {
+    roundRect(g, nanoWin.x, nanoWin.y, nanoWin.w, nanoWin.h, 0.6 * nk);
+    g.fillStyle = '#000';
+    g.fill();
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(screen, nanoLcd.x, nanoLcd.y, nanoLcd.w, nanoLcd.h);
+    const veil = 1 - Math.max(0, Math.min(1, s.backlight));
+    if (veil > 0.001) {
+      g.fillStyle = `rgba(0,0,0,${veil})`;
+      g.fillRect(nanoLcd.x, nanoLcd.y, nanoLcd.w, nanoLcd.h);
+    }
+    const refl = g.createLinearGradient(nanoLcd.x, nanoLcd.y, nanoLcd.x + nanoLcd.w, nanoLcd.y + nanoLcd.h);
+    refl.addColorStop(0, 'rgba(255,255,255,0.07)');
+    refl.addColorStop(0.5, 'rgba(255,255,255,0)');
+    g.fillStyle = refl;
+    g.fillRect(nanoLcd.x, nanoLcd.y, nanoLcd.w, nanoLcd.h);
+  }
 
   function bodyLayer(finish) {
     let c = layers.get(finish);
@@ -2519,12 +2559,13 @@ function createFace(canvas, screen, opts = {}) {
     if (marker !== target) {
       marker = target > marker ? Math.min(1, marker + dt / MARKER_IN) : Math.max(0, marker - dt / MARKER_OUT);
     }
-    const key = [s.finish, Math.round(s.backlight * 100), s.pressed || '', marker > 0 ? Math.round(s.angle * 200) : -1,
+    const key = [s.model || 'video', s.finish, Math.round(s.backlight * 100), s.pressed || '', marker > 0 ? Math.round(s.angle * 200) : -1,
       Math.round(marker * 20), s.reflVersion || 0, s.screenOnly ? 1 : 0, s.videoUnder ? 1 : 0].join('|');
     if (!s.screenDirty && key === last) return false;
     last = key;
     const f = FINISHES[s.finish] || FINISHES.black;
     g.clearRect(0, 0, W, H);
+    if (s.model === 'nano') { drawNano(s); return true; }
     if (overlay) {
       roundRect(g, X(-WINDOW.w / 2), Y(LCD.cy + WINDOW.h / 2), WINDOW.w * k, WINDOW.h * k, WINDOW.r * k);
       g.fillStyle = '#000';
@@ -2567,7 +2608,7 @@ function createFace(canvas, screen, opts = {}) {
     return true;
   }
 
-  return { draw, get animating() { return marker > 0 && marker < 1; } };
+  return { draw, windowRect, get animating() { return marker > 0 && marker < 1; } };
 }
 
 /** The mirror-polished steel back with the peach engraved in it (static: drawn once). Polished
@@ -3048,7 +3089,8 @@ function createControllerReader() {
   __defs['main.js'] = function (__e) {
 __e.default = install;
 // assPod: a 5th-generation-style music player in your hand in the SteamVR menu, playing the VLC
-// media library. This is its half inside SteamVR's systemui page (installed by the daemon as the
+// media library. The main menu's assPod Model swaps the body for a 2nd-generation nano (models.js):
+// the same OS, scaled onto its smaller screen, and no video. This is its half inside SteamVR's systemui page (installed by the daemon as the
 // page script device/vr/systemui.asspod.js, built from these sources by tools/build_asspod.py);
 // the daemon's plugin device/shell_ext/asspod.py runs VLC and reads the library.
 //
@@ -3061,8 +3103,9 @@ __e.default = install;
 // Controls: both sticks turn the click wheel; a stick click presses the wheel button under it
 // (centred: the centre button). A is the centre button, B is the wheel's Menu, and the hamburger
 // (menu) button puts the assPod away; so does closing the SteamVR menu. The right controller's
-// buttons are read here from its model; the left one's (A and B in the same places) come from Steam
-// through the plugin (btn()). Music keeps playing: the player keeps running here at a few Hz, and
+// buttons are read here from its model, Steam's A / B / hamburger come through the plugin (btn())
+// otherwise. Both sticks act alike: only their models are read (Steam's d-pad directions, which the
+// left stick's tilts also send, are not relayed). Music keeps playing: the player keeps running here at a few Hz, and
 // the plugin keeps VLC up while anything plays and stops it when the assPod is away and nothing plays.
 //
 // The plugin talks to this page only through the returned api: poll() drains the commands for VLC
@@ -3082,6 +3125,7 @@ const { createFace, createBack, BODY } = __req('face.js');
 const { drawPeachSilhouette } = __req('brand/peach.js');
 const { createReflector, pose, qmul, qrot, qconj } = __req('reflect.js');
 const { createSceneGraph } = __req('sg.js');
+const { MODELS, currentModel, currentFinish, bodyMetres } = __req('models.js');
 
 const FACE_W = 476;                        // px; the body is 61.8 x 103.5 mm
 const FACE_H = Math.round(FACE_W * BODY.h / BODY.w);
@@ -3089,6 +3133,10 @@ const FACE_WIDTH_M = 0.085;                // shown about 1.4x the real body, fo
 const BODY_M = {                           // the 3D body in metres, at that scale
   w: FACE_WIDTH_M, h: FACE_WIDTH_M * BODY.h / BODY.w, d: FACE_WIDTH_M * 11 / BODY.w, r: FACE_WIDTH_M * BODY.corner / BODY.w,
 };
+const NANO_M = bodyMetres(MODELS.nano);    // the nano, at its own scale
+// a model's geometry for the scene graph (model metres)
+const geoOf = (m) => ({ w: m.body.w / 1000, d: m.body.d / 1000, lcdCy: m.lcd.cy / 1000, lcdW: m.lcd.w / 1000,
+  winW: m.win.w / 1000, winH: m.win.h / 1000, wheelCy: m.wheel.cy / 1000 });
 const BACK_W = 238;                        // px: the steel back's live reflection (half the face's resolution)
 const BACK_H = Math.round(BACK_W * BODY.h / BODY.w);
 const REFLECT_EVERY = 2;                   // frames between reflection updates (about 30 a second)
@@ -3200,9 +3248,15 @@ function install(ctx) {
   library.onLoad(() => { art.clear(); os.ctx.popToRoot(); os.invalidate(); });
   // the EQ follows the setting (VLC's preset by name)
   settings.on('change', ({ key }) => { if (key === 'eq' || key === '*') send({ op: 'eq', name: settings.get('eq') }); });
-  // the body's colour: podd follows the finish in the poll; the render-model body is rebuilt
+  // The body: podd follows the model and its finish in the poll (one layout holds both); the scene
+  // graph is rebuilt for the other body's screen panel and place in the hand, or for the render
+  // models' colour. (Picking the nano stops a video: os/screens/main-menu.js.)
   settings.on('change', ({ key }) => {
-    if ((key === 'finish' || key === '*') && st.open && !st.podd) st.holdPose = sg.show(showOpts(st.hand, st.world)) || st.holdPose;
+    if (!st.open) return;
+    if (key === 'model' || key === '*' || (!st.podd && (key === 'finish' || key === 'nanoFinish'))) {
+      if (key === 'model' && st.world) unpin(false);
+      st.holdPose = sg.show(showOpts(st.hand, st.world)) || st.holdPose;
+    }
   });
 
   // ---------------------------------------------------------------- state
@@ -3295,11 +3349,13 @@ function install(ctx) {
       videoMode();
       const screenDirty = os.render(t);
       // the painted reflections only without podd (podd shades the glass and the steel itself)
-      if (!st.podd && st.frames % REFLECT_EVERY === 0 && reflector.update(st.hand, st.holdPose)) back.draw(reflector.back, reflector.version);
+      const model = currentModel(settings).id;
+      const painted = !st.podd && model === 'video';   // the nano's render models carry their own back
+      if (painted && st.frames % REFLECT_EVERY === 0 && reflector.update(st.hand, st.holdPose)) back.draw(reflector.back, reflector.version);
       const ws = wheel.state;
       face.draw({
-        reflection: !st.podd && reflector.version ? reflector.front : null, reflVersion: reflector.version, screenOnly: !!st.podd, videoUnder: !!st.videoMode,
-        finish: settings.get('finish'), backlight: os.backlight, screenDirty,
+        reflection: painted && reflector.version ? reflector.front : null, reflVersion: reflector.version, screenOnly: !!st.podd, videoUnder: !!st.videoMode,
+        model, finish: currentFinish(settings), backlight: os.backlight, screenDirty,
         touching: ws.touching, angle: ws.angle, pressed: ws.pressedPart || (st.keys.select ? 'select' : st.keys.menu ? 'menu' : null), now: t,
       });
     } catch (err) { note(err); }
@@ -3317,9 +3373,15 @@ function install(ctx) {
     if (player.state === 'playing') st.bgTimer = setTimeout(background, BACKGROUND_MS);
   }
 
+  // Reposition's places are kept per body: the Video's under the hand's name, the nano's as nano-<hand>
+  const holdKey = (hand) => (currentModel(settings).id === 'video' ? hand : `${currentModel(settings).id}-${hand}`);
+
   function showOpts(hand, world) {
-    return { hand, body: BODY_M, rects, modelDir: st.modelDir, finish: settings.get('finish'), podd: st.podd,
-      hold: st.holds[hand] || null, world: world || null, video: !!st.videoMode };
+    const m = currentModel(settings);
+    const wr = face.windowRect(m.id);
+    rects.win = { x: rects.face.x + wr.x, y: rects.face.y + wr.y, w: wr.w, h: wr.h };
+    return { hand, body: m.id === 'video' ? BODY_M : NANO_M, rects, modelDir: st.modelDir, model: m.id, geo: geoOf(m),
+      finish: currentFinish(settings), podd: st.podd, hold: st.holds[holdKey(hand)] || null, world: world || null, video: !!st.videoMode };
   }
 
   // A video on the screen with podd: podd shows its picture (the daemon's frames, full rate) in a panel
@@ -3351,7 +3413,7 @@ function install(ctx) {
       const hp = pose('/user/hand/' + st.hand);
       if (hp) {
         const inv = qconj(hp.q);
-        st.holds[st.hand] = {
+        st.holds[holdKey(st.hand)] = {
           rot: qmul(inv, st.world.rot),
           centre: qrot(inv, st.world.centre.map((v, i) => v - hp.t[i])),
         };
@@ -3366,6 +3428,7 @@ function install(ctx) {
     return {
       id: 'reposition',
       title: 'Reposition',
+      adaptive: true,
       keepAwake: true,
       enter() { if (!pin()) note('reposition: no hand pose'); },
       exit() { if (st.world) unpin(false); },
@@ -3374,7 +3437,7 @@ function install(ctx) {
         if (e.type !== 'press') return e.type === 'release' ? false : undefined;
         if (e.part === 'select') return done(() => unpin(true));
         if (e.part === 'menu') return done(() => unpin(false));
-        if (e.part === 'play') return done(() => { st.holds[st.hand] = null; unpin(false); });
+        if (e.part === 'play') return done(() => { st.holds[holdKey(st.hand)] = null; unpin(false); });
         return false;
       },
       draw(g, r) {
@@ -3428,6 +3491,10 @@ function install(ctx) {
       for (const [p, t] of Object.entries(opts.resume)) if (Number.isFinite(t)) resume.set(p, t);
     }
     if (opts.holds && typeof opts.holds === 'object') st.holds = Object.assign({ left: null, right: null }, opts.holds);
+    // the body and colours picked last time (the plugin keeps them: device/shell_ext/asspod.py PREFS)
+    if (opts.prefs && typeof opts.prefs === 'object') {
+      for (const key of ['model', 'finish', 'nanoFinish']) if (typeof opts.prefs[key] === 'string') settings.set(key, opts.prefs[key]);
+    }
     st.world = null;
     st.videoMode = false;
     art.videoExternal = false;
@@ -3485,7 +3552,8 @@ function install(ctx) {
   function status() {
     return {
       ok: true, open: st.open, hand: st.hand, closedBy: st.closedBy, loading: st.loading,
-      hold: st.holdPose || null, bodyScale: BODY_M.w / 0.0618, finish: settings.get('finish'), podd: !!st.podd,
+      hold: st.holdPose || null, bodyScale: BODY_M.w / 0.0618, nanoScale: MODELS.nano.scale, model: currentModel(settings).id,
+      finish: currentFinish(settings), podd: !!st.podd,
       player: { state: player.state, current: player.current ? { id: player.current.id, title: player.current.title } : null,
         position: Math.round((player.position || 0) * 10) / 10, queue: player.queue.length, volume: player.volume },
       library: { tracks: library.tracks.length, albums: library.albums.length, videos: library.videos.length },
@@ -3501,6 +3569,7 @@ function install(ctx) {
     os.ctx.push({
       id: 'notice',
       title: String(title || 'assPod'),
+      adaptive: true,
       handle(e) {
         if (e.type === 'press' && (e.part === 'select' || e.part === 'menu')) { os.ctx.pop(); return true; }
         return e.type === 'scroll' ? false : undefined;
@@ -3542,7 +3611,8 @@ function install(ctx) {
         playing: player.state === 'playing', state: player.state,
         current: player.current ? player.current.path : null,
         volume: player.volume, eq: settings.get('eq'),
-        hold: st.holdPose || null, world: st.world, holds: st.holds, finish: settings.get('finish'),
+        hold: st.holdPose || null, world: st.world, holds: st.holds, model: currentModel(settings).id, finish: currentFinish(settings),
+        prefs: { model: currentModel(settings).id, finish: settings.get('finish'), nanoFinish: settings.get('nanoFinish') },
         position: Math.round((player.position || 0) * 1000) / 1000,
         video: player.current && player.current.kind === 'video' && os.ctx.top()?.id === 'videoplayer' && st.open,
       };
@@ -4399,6 +4469,75 @@ class Player extends Emitter {
   }
 }
   };
+  // ---------------------------------------------------------------- models.js
+  __defs['models.js'] = function (__e) {
+__e.currentModel = currentModel;
+__e.currentFinish = currentFinish;
+__e.bodyMetres = bodyMetres;
+// The assPod's bodies: the Video (5th generation, the original) and the nano (2nd generation). The
+// main menu's assPod Model picks one; Color picks among that body's own finishes. Both run the same
+// OS on a 4:3 screen; the nano's is 240 x 180 logical px against the Video's 320 x 240, so its text is
+// larger on its screen, as on the real one. The nano plays no video: its menus leave the Videos out.
+//
+// Geometry in millimetres, model frame (tools/asspod-model, tools/nano2-model GEOMETRY): origin at
+// the body's centre, y toward the top. `scale` is how much larger than life it is shown in the hand;
+// podd (native/podd/podd.cpp VIDEO / NANO) and its render models use the same numbers. `screen` is
+// the OS's logical screen on that body.
+
+const MODELS = Object.freeze({
+  video: Object.freeze({
+    id: 'video',
+    label: 'Video Gen 1',
+    about: 'assPod Video',
+    body: { w: 61.8, h: 103.5, d: 11.0 },
+    lcd: { cy: 24.2, w: 50.8, h: 38.1 },
+    win: { w: 53.2, h: 40.5 },
+    wheel: { cy: -24.0 },
+    screen: { w: 320, h: 240 },            // logical px (os/theme.js setScreenSize)
+    scale: 0.085 / 0.0618,                 // shown 85 mm wide
+    finishKey: 'finish',
+    finishes: [['black', 'Black'], ['white', 'White']],
+    videos: true,
+  }),
+  nano: Object.freeze({
+    id: 'nano',
+    label: 'Nano Gen 2',
+    about: 'assPod nano',
+    body: { w: 40.0, h: 90.0, d: 6.5 },
+    lcd: { cy: 28.88, w: 29.6, h: 22.2 },
+    win: { w: 31.62, h: 24.04 },
+    wheel: { cy: -13.3 },
+    screen: { w: 240, h: 180 },            // the same text on less screen: six rows, as on the real nano
+    scale: 1.3125,                         // shown 52.5 mm wide
+    finishKey: 'nanoFinish',
+    finishes: [['silver', 'Silver'], ['green', 'Green'], ['blue', 'Blue'], ['pink', 'Pink'], ['black', 'Black'], ['red', '(PRODUCT)RED']],
+    videos: false,
+  }),
+});
+
+const MODEL_ORDER = ['video', 'nano'];
+
+/** The current body's definition. */
+function currentModel(settings) {
+  return MODELS[settings.get('model')] || MODELS.video;
+}
+
+/** The current body's finish (one of its own; its first otherwise). */
+function currentFinish(settings) {
+  const m = currentModel(settings);
+  const f = settings.get(m.finishKey);
+  return m.finishes.some(([k]) => k === f) ? f : m.finishes[0][0];
+}
+
+/** The body in metres as shown in the hand: { w, h, d } at the model's scale. */
+function bodyMetres(m) {
+  const k = m.scale / 1000;
+  return { w: m.body.w * k, h: m.body.h * k, d: m.body.d * k };
+}
+
+__e.MODELS = MODELS;
+__e.MODEL_ORDER = MODEL_ORDER;
+  };
   // ---------------------------------------------------------------- os/menu.js
   __defs['os/menu.js'] = function (__e) {
 __e.createMenu = createMenu;
@@ -4470,7 +4609,11 @@ function createMenu(ctx, def) {
   }
 
   function refresh() {
+    // the highlight stays on its item when the list changes around it (the main menu without Videos)
+    const was = items[index];
     items = resolve(def.items) ?? [];
+    const j = was ? items.indexOf(was) : -1;
+    if (j >= 0) index = j;
     clampWindow();
   }
 
@@ -4584,9 +4727,11 @@ function createMenu(ctx, def) {
 __e.createOS = createOS;
 // assPod OS core: screen stack, 220 ms slide transitions, status bar, backlight timer and dimming,
 // sleep/wake, the boot logo, the default button behavior, and render throttling for the screen
-// texture. Draws the 320x240 logical LCD onto the 640x480 canvas that main.js uploads as a texture.
+// texture. Draws the logical LCD (320x240 on the Video, 240x180 on the nano) onto the 640x480 canvas
+// that main.js uploads as a texture.
 
 const { SCREEN_W } = __req('config.js');
+const { currentModel } = __req('models.js');
 const { settings: defaultSettings } = __req('settings.js');
 const { drawPeachSilhouette } = __req('brand/peach.js');
 const theme = __req('os/theme.js');
@@ -4595,7 +4740,7 @@ const { createMenu } = __req('os/menu.js');
 const { createMainMenu } = __req('os/screens/main-menu.js');
 const { createNowPlaying } = __req('os/screens/now-playing.js');
 
-const { M, C, ANIM } = theme;
+const { M, C, ANIM, setScreenSize } = theme;
 
 /**
  * @typedef {import('../input/clickwheel.js').WheelEvent} WheelEvent
@@ -4628,8 +4773,9 @@ const { M, C, ANIM } = theme;
 
 // ---------------------------------------------------------------- constants
 
-const CONTENT = Object.freeze({ x: 0, y: M.statusH, w: M.W, h: M.H - M.statusH });
-const FULL = Object.freeze({ x: 0, y: 0, w: M.W, h: M.H });
+// the content area under the status bar, and the whole screen (the logical size can change: models.js)
+const content = () => ({ x: 0, y: M.statusH, w: M.W, h: M.H - M.statusH });
+const full = () => ({ x: 0, y: 0, w: M.W, h: M.H });
 const FRAME_MS = 1000 / ANIM.maxFps;
 // rAF timestamps jitter by a fraction of a ms; without slack a 25 ms cap would skip a frame at 80 Hz.
 const FRAME_SLACK_MS = 1;
@@ -4658,7 +4804,12 @@ function normKey(s) {
  */
 function createOS({ canvas, player, library, art, apps, settings = defaultSettings, boot: bootEnabled = false }) {
   const g = canvas.getContext('2d');
-  const scale = canvas.width / SCREEN_W;
+  // The body's logical screen (models.js): the canvas stays the same size and the scale follows.
+  const applyModel = () => { const m = currentModel(settings); setScreenSize(m.screen.w, m.screen.h); };
+  applyModel();
+  if (typeof settings.on === 'function') {
+    settings.on('change', ({ key }) => { if (key === 'model' || key === '*') { applyModel(); dirty = DIRTY_NOW; } });
+  }
 
   /** @type {Screen[]} */
   const stack = [];
@@ -4944,8 +5095,18 @@ function createOS({ canvas, player, library, art, apps, settings = defaultSettin
   }
 
   const reported = new WeakSet();
+  // Menus and the screens marked `adaptive` lay themselves out on the current logical screen; the
+  // rest (the games, the clock, Cover Flow...) are drawn for the Video's 320 x 240 and scaled to fit.
   function drawScreen(s, r, now) {
     try {
+      if (!s.isMenu && !s.adaptive && M.W !== SCREEN_W) {
+        const k = M.W / SCREEN_W;
+        g.save();
+        g.scale(k, k);
+        s.draw(g, { x: r.x / k, y: r.y / k, w: r.w / k, h: r.h / k }, now);
+        g.restore();
+        return;
+      }
       s.draw(g, r, now);
     } catch (err) {
       // One broken screen must not take the whole OS down every frame; report it once.
@@ -4957,12 +5118,13 @@ function createOS({ canvas, player, library, art, apps, settings = defaultSettin
     if (dx <= -M.W || dx >= M.W) return;
     g.save();
     g.beginPath();
-    g.rect(CONTENT.x, CONTENT.y, CONTENT.w, CONTENT.h);
+    const r = content();
+    g.rect(r.x, r.y, r.w, r.h);
     g.clip();
     g.translate(dx, 0);
     g.fillStyle = C.bg;
-    g.fillRect(CONTENT.x, CONTENT.y, CONTENT.w, CONTENT.h);
-    drawScreen(s, CONTENT, now);
+    g.fillRect(r.x, r.y, r.w, r.h);
+    drawScreen(s, r, now);
     g.restore();
   }
 
@@ -4981,7 +5143,7 @@ function createOS({ canvas, player, library, art, apps, settings = defaultSettin
         g.fillStyle = '#000000';
         g.fillRect(0, 0, M.W, M.H);
       }
-      drawScreen(s, FULL, now);
+      drawScreen(s, full(), now);
       g.restore();
       return;
     }
@@ -4993,6 +5155,7 @@ function createOS({ canvas, player, library, art, apps, settings = defaultSettin
   }
 
   function paint(now) {
+    const scale = canvas.width / M.W;
     g.setTransform(scale, 0, 0, scale, 0, 0);
     g.globalAlpha = 1;
     g.globalCompositeOperation = 'source-over';
@@ -5226,6 +5389,7 @@ __e.createMainMenu = createMainMenu;
 const { createRng, hashString } = __req('util/rng.js');
 const { createSettings } = __req('os/screens/settings.js');
 const { createSearch } = __req('os/screens/search.js');
+const { MODELS, MODEL_ORDER, currentModel, currentFinish } = __req('models.js');
 
 // ---------------------------------------------------------------- sorting
 
@@ -5254,7 +5418,9 @@ function albumOrder(library) {
  * A list of songs (or videos, in playlists). Selecting row i plays the whole list from i,
  * the way the assPod queues whatever list you picked from, then opens Now Playing.
  */
-function songList(ctx, id, title, list) {
+function songList(ctx, id, title, all) {
+  // the nano plays no video: a playlist's videos are left out on it
+  const list = currentModel(ctx.settings).videos ? all : all.filter((t) => t.kind !== 'video');
   const items = list.map((t, i) => ({
     label: t.title,
     speaker: () => ctx.player.current?.id === t.id && ctx.player.state !== 'stopped',
@@ -5392,31 +5558,84 @@ function shuffleSongs(ctx) {
   return true;
 }
 
+// ---------------------------------------------------------------- the body: model and colour
+
+/** assPod Model: the Video or the nano, checkmarked; picking one switches the body and goes back.
+ *  The nano plays no video: a video playing stops when it is picked. */
+function modelMenu(ctx) {
+  return ctx.menu({
+    id: 'model',
+    title: 'assPod Model',
+    initialIndex: () => Math.max(0, MODEL_ORDER.indexOf(currentModel(ctx.settings).id)),
+    items: MODEL_ORDER.map((id) => ({
+      label: MODELS[id].label,
+      check: () => currentModel(ctx.settings).id === id,
+      action: (c) => {
+        if (!MODELS[id].videos && c.player.current?.kind === 'video') c.player.stop();
+        c.settings.set('model', id);
+        c.pop();
+        return true;
+      },
+    })),
+  });
+}
+
+/** Color: the current body's own finishes, checkmarked. */
+function colorMenu(ctx) {
+  const m = currentModel(ctx.settings);
+  return ctx.menu({
+    id: 'color',
+    title: 'Color',
+    initialIndex: () => Math.max(0, m.finishes.findIndex(([k]) => k === currentFinish(ctx.settings))),
+    items: m.finishes.map(([key, label]) => ({
+      label,
+      check: () => currentFinish(ctx.settings) === key,
+      action: (c) => {
+        c.settings.set(m.finishKey, key);
+        c.pop();
+        return true;
+      },
+    })),
+  });
+}
+
+// ---------------------------------------------------------------- main menu
+
 function createMainMenu(ctx) {
-  const base = [
+  const finishLabel = () => {
+    const m = currentModel(ctx.settings);
+    const f = currentFinish(ctx.settings);
+    return (m.finishes.find(([k]) => k === f) || m.finishes[0])[1];
+  };
+  const all = [
     { id: 'music', label: 'Music', open: createMusicMenu },
     { id: 'videos', label: 'Videos', open: (c) => c.apps.videos(c) },
     { id: 'extras', label: 'Extras', open: (c) => c.apps.extras(c) },
     { id: 'settings', label: 'Settings', open: createSettings },
     { id: 'reposition', label: 'Reposition', open: (c) => c.apps.reposition(c) },
-    {
-      id: 'color',
-      label: 'Color',
-      detail: () => (ctx.settings.get('finish') === 'white' ? 'White' : 'Black'),
-      action: (c) => { c.settings.set('finish', c.settings.get('finish') === 'white' ? 'black' : 'white'); return true; },
-    },
+    { id: 'model', label: 'assPod Model', detail: () => currentModel(ctx.settings).label, open: modelMenu },
+    { id: 'color', label: 'Color', detail: finishLabel, open: colorMenu },
     { id: 'shuffle', label: 'Shuffle Songs', action: shuffleSongs },
     { id: 'backlight', label: 'Backlight', action: (c) => { c.os.toggleBacklight(); return false; } },
   ];
-  const withNowPlaying = [
-    ...base,
-    { id: 'nowplaying', label: 'Now Playing', chevron: true, action: (c) => { c.nowPlaying(); return true; } },
-  ];
+  const nowPlaying = { id: 'nowplaying', label: 'Now Playing', chevron: true, action: (c) => { c.nowPlaying(); return true; } };
+  // the same item objects every time, so the menu keeps its place across a model switch
+  const lists = new Map();
   return ctx.menu({
     id: 'main',
     title: 'assPod',
-    // Like the 5G, Now Playing is listed only while something is queued (not after the queue ends).
-    items: () => (ctx.player.current && ctx.player.state !== 'stopped' ? withNowPlaying : base),
+    // Like the 5G, Now Playing is listed only while something is queued (not after the queue ends);
+    // the nano has no Videos.
+    items: () => {
+      const videos = currentModel(ctx.settings).videos;
+      const playing = !!(ctx.player.current && ctx.player.state !== 'stopped');
+      const key = `${videos}|${playing}`;
+      if (!lists.has(key)) {
+        const base = videos ? all : all.filter((it) => it.id !== 'videos');
+        lists.set(key, playing ? [...base, nowPlaying] : base);
+      }
+      return lists.get(key);
+    },
   });
 }
   };
@@ -5427,23 +5646,40 @@ __e.createNowPlaying = createNowPlaying;
 // artist / album on the right, and a progress bar with elapsed and remaining time.
 // Center click cycles progress -> scrubber -> rating; the wheel sets volume, seeks or rates.
 
-const { SCREEN_SCALE } = __req('config.js');
+const { SCREEN_W, SCREEN_SCALE } = __req('config.js');
+const { M } = __req('os/theme.js');
 
 // ---------------------------------------------------------------- layout
 
-const POS = { x: 10, y: 40 };
-const ART = { x: 10, y: 48, s: 112 };
-const TEXT = { x: 132, w: 180, title: 82, artist: 102, album: 122 };
-const BAR = { x: 10, y: 182, w: 300, h: 10 };
-const TIME_Y = 208;
-const STARS = { cx: 160, cy: 187 };
-const VOLUME = { x: 10, y: 180, w: 300 };
+// The Video's 320 x 240 layout, and the nano's on its 240 x 180 screen (the same text, less room:
+// smaller art and a shorter bar). relayout() picks the one for the current logical screen.
+const LAYOUTS = {
+  320: {
+    POS: { x: 10, y: 40 }, ART: { x: 10, y: 48, s: 112 }, TEXT: { x: 132, w: 180, title: 82, artist: 102, album: 122 },
+    BAR: { x: 10, y: 182, w: 300, h: 10 }, TIME_Y: 208, STARS: { cx: 160, cy: 187 }, VOLUME: { x: 10, y: 180, w: 300 },
+    GLYPH: { right: 310, w: 12, h: 9, gap: 5 },
+  },
+  240: {
+    POS: { x: 8, y: 38 }, ART: { x: 8, y: 46, s: 80 }, TEXT: { x: 96, w: 136, title: 66, artist: 84, album: 102 },
+    BAR: { x: 8, y: 136, w: 224, h: 9 }, TIME_Y: 160, STARS: { cx: 120, cy: 141 }, VOLUME: { x: 8, y: 134, w: 224 },
+    GLYPH: { right: 232, w: 12, h: 9, gap: 5 },
+  },
+};
+let POS, ART, TEXT, BAR, TIME_Y, STARS, VOLUME, GLYPH, ART_PX;
+let laidOut = 0;
+function relayout() {
+  if (laidOut === M.W) return;
+  laidOut = M.W;
+  ({ POS, ART, TEXT, BAR, TIME_Y, STARS, VOLUME, GLYPH } = LAYOUTS[M.W] || LAYOUTS[320]);
+  // the cover is resampled to the art box's backing-store size (the canvas is 640 px wide)
+  ART_PX = Math.round(ART.s * SCREEN_W * SCREEN_SCALE / M.W);
+}
+relayout();
 const VOLUME_STEPS = 16;
 const SCRUB_STEP_S = 2;
 const SCRUB_FAST_MS = 120;   // steps closer than this count as "scrolling fast"
 
 const MODES = ['progress', 'scrub', 'rating'];
-const GLYPH = { right: 310, w: 12, h: 9, gap: 5 };   // shuffle / repeat marks, right of "n of N"
 
 /** Grey square with a beamed note, for items without cover art. */
 function drawPlaceholderArt(g, x, y, s) {
@@ -5519,14 +5755,14 @@ function drawRepeatGlyph(g, x, y, color, one, oneFont) {
 
 // The 256px cover is resampled once per album to the art box's backing-store size (224px), so
 // each 4 Hz (or 40 fps marquee) redraw is a 1:1 blit instead of a high-quality downscale.
-const ART_PX = ART.s * SCREEN_SCALE;
 let artKey = null;
+let artPx = 0;
 let artSrc = null;
 let artCanvas = null;
 
 function scaledCover(src, key) {
   // The source canvas counts too: art.clear() redraws covers (late web fonts) as new canvases.
-  if (key === artKey && src === artSrc && artCanvas) return artCanvas;
+  if (key === artKey && src === artSrc && artCanvas && artPx === ART_PX) return artCanvas;
   if (typeof document === 'undefined') return src;
   artCanvas ??= document.createElement('canvas');
   artCanvas.width = artCanvas.height = ART_PX;
@@ -5536,6 +5772,7 @@ function scaledCover(src, key) {
   g.drawImage(src, 0, 0, ART_PX, ART_PX);
   artKey = key;
   artSrc = src;
+  artPx = ART_PX;
   return artCanvas;
 }
 
@@ -5582,6 +5819,7 @@ function createNowPlaying(ctx) {
 
   const screen = {
     id: 'nowplaying',
+    adaptive: true,
     title: 'Now Playing',
     // Only a moving playhead needs the 4 Hz refresh; paused, the screen is static (no uploads).
     get refreshMs() { return player.state === 'playing' || player.seeking ? 250 : 0; },
@@ -5601,6 +5839,7 @@ function createNowPlaying(ctx) {
     },
 
     handle(e) {
+      relayout();
       const now = ctx.now();
       const cur = player.current;
       if (e.type === 'press' && e.part === 'select') {
@@ -5641,6 +5880,7 @@ function createNowPlaying(ctx) {
     },
 
     draw(g, r, now) {
+      relayout();
       g.fillStyle = C.bg;
       g.fillRect(r.x, r.y, r.w, r.h);
       const cur = player.current;
@@ -5735,6 +5975,7 @@ function createNowPlaying(ctx) {
     },
 
     animating(now) {
+      relayout();
       // One redraw when the volume overlay or a scrubber/rating mode times out, even when paused.
       if (volumeUntil && drawnAt < volumeUntil && now >= volumeUntil) return true;
       const modeEnd = modeAt + ANIM.npModeTimeoutMs;
@@ -5768,7 +6009,6 @@ const { songList, albumSongs } = __req('os/screens/main-menu.js');
 
 const KEYS = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', ' ', 'DEL', 'DONE'];
 const STRIP_H = 44;          // letter band at the bottom of the content area
-const RESULT_ROWS = 7;       // 7 x 24 px rows above the band
 const KEY_W = 22;
 
 function keyLabel(k) {
@@ -5783,6 +6023,8 @@ function createSearch(ctx) {
   const keyFont = font(15, 600);
   const smallKeyFont = font(10, 700);
 
+  // result rows above the letter band: 7 on the Video, 4 on the nano
+  const resultRows = () => Math.floor((M.H - M.statusH - STRIP_H) / M.rowH);
   let query = '';
   let keyIndex = 0;
   let inResults = false;
@@ -5849,6 +6091,7 @@ function createSearch(ctx) {
   return {
     id: 'search',
     title: 'Search',
+    adaptive: true,   // lays itself out on the current logical screen (os.js)
     enter() { runSearch(); },
     handle(e) {
       if (e.type === 'scroll') {
@@ -5858,7 +6101,7 @@ function createSearch(ctx) {
           if (next >= results.length) return false;
           index = next;
           if (index < first) first = index;
-          if (index >= first + RESULT_ROWS) first = index - RESULT_ROWS + 1;
+          if (index >= first + resultRows()) first = index - resultRows() + 1;
           return true;
         }
         const next = keyIndex + e.delta;
@@ -5884,10 +6127,11 @@ function createSearch(ctx) {
     draw(g, r, now) {
       g.fillStyle = C.bg;
       g.fillRect(r.x, r.y, r.w, r.h);
-      const listH = RESULT_ROWS * M.rowH;
-      const scroll = results.length > RESULT_ROWS;
+      const rows = resultRows();
+      const listH = rows * M.rowH;
+      const scroll = results.length > rows;
       const w = scroll ? M.W - M.scrollbarW : M.W;
-      for (let i = first; i < Math.min(results.length, first + RESULT_ROWS); i++) {
+      for (let i = first; i < Math.min(results.length, first + rows); i++) {
         const res = results[i];
         row.label = res.label;
         row.detail = res.kind;
@@ -5902,7 +6146,7 @@ function createSearch(ctx) {
         g.fillText('No results', M.W / 2, r.y + 60);
         g.restore();
       }
-      if (scroll) ui.drawScrollbar(g, M.W - M.scrollbarW, r.y, listH, results.length, RESULT_ROWS, first);
+      if (scroll) ui.drawScrollbar(g, M.W - M.scrollbarW, r.y, listH, results.length, rows, first);
       drawStrip(g, r.y + r.h - STRIP_H);
     },
     highlight() {
@@ -5919,7 +6163,9 @@ __e.createSettings = createSettings;
 // Settings, following the 5G: values cycle in place (Shuffle, Repeat, Clicker),
 // option lists show a checkmark and return to Settings when one is picked (Backlight Timer, EQ),
 // Brightness has its own slider screen, plus About, Date & Time, Legal and Reset Settings.
-// EQ is VLC's own equalizer presets. (The body's colour is on the main menu: Color.)
+// EQ is VLC's own equalizer presets. (The body and its colour are on the main menu: assPod Model, Color.)
+
+const { currentModel } = __req('models.js');
 
 // ---------------------------------------------------------------- option tables
 
@@ -6050,22 +6296,23 @@ function aboutScreen(ctx) {
   const videos = lib.videos?.length ?? 0;
   const albums = lib.albums?.length ?? 0;
   const secs = (list) => (list ?? []).reduce((s, t) => s + (t.duration || 0), 0);
-  const hours = (secs(lib.tracks) + secs(lib.videos)) / 3600;
+  const hours = (secs(lib.tracks) + (currentModel(ctx.settings).videos ? secs(lib.videos) : 0)) / 3600;
   const info = lib.info || {};
   const lines = [
     ['Songs', songs.toLocaleString('en-US')],
     ['Albums', albums.toLocaleString('en-US')],
-    ['Videos', videos.toLocaleString('en-US')],
+    ...(currentModel(ctx.settings).videos ? [['Videos', videos.toLocaleString('en-US')]] : []),
     ['Playing Time', `${hours.toFixed(1)} h`],
     ['Sources', String((info.sources || []).length)],
     ['Player', 'VLC'],
-    ['Model', 'assPod Video'],
+    ['Model', currentModel(ctx.settings).about],
   ];
   const total = lines.length + 1;   // + the name line
   let first = 0;
   return {
     id: 'about',
     title: 'About',
+    adaptive: true,
     handle(e) {
       if (e.type === 'scroll') {
         const next = Math.max(0, Math.min(total - M.rows, first + e.delta));
@@ -6252,6 +6499,7 @@ __e.EQ_NAMES = EQ_NAMES;
   };
   // ---------------------------------------------------------------- os/theme.js
   __defs['os/theme.js'] = function (__e) {
+__e.setScreenSize = setScreenSize;
 // 5G visual spec, logical px on the 320x240 screen
 const { SCREEN_W, SCREEN_H } = __req('config.js');
 
@@ -6273,7 +6521,7 @@ const FONTS = {
 };
 
 const M = {
-  W: SCREEN_W, H: SCREEN_H,
+  W: SCREEN_W, H: SCREEN_H,  // the logical screen: setScreenSize() switches it (the nano's is smaller)
   statusH: 22,              // includes the 1px bottom border; content starts at y=22
   rowH: 24, rows: 9,        // list area y=22..238 (2px white margin at the bottom)
   padX: 8,                  // label left inset
@@ -6281,6 +6529,17 @@ const M = {
   chevronW: 6, chevronH: 10, chevronInset: 9,  // chevron right edge = rowRight - 9
   scrollbarW: 8,            // at x=312..320 when a list overflows; rows then end at 312
 };
+
+/**
+ * The logical screen, in the theme's own px: the Video's 320 x 240, or the nano's 240 x 180
+ * (models.js). Text and rows keep their size, so on the nano they fill more of the screen (six rows,
+ * as on the real one); the list's row count follows.
+ */
+function setScreenSize(w, h) {
+  M.W = w;
+  M.H = h;
+  M.rows = Math.floor((h - M.statusH - 2) / M.rowH);
+}
 
 const C = {
   bg: '#ffffff', text: '#000000', textHi: '#ffffff', textDim: '#6b6b6b',
@@ -6508,7 +6767,7 @@ function drawBattery(g, x, y) {
   g.lineWidth = 1;
   roundRectPath(g, 0.5, 0.5, 23, 10, 1.5);
   g.stroke();
-  // Terminal nub, 2x5 at x = 311.
+  // Terminal nub, 2x5 at the body's right.
   g.fillStyle = C.batteryBorder;
   g.fillRect(24, 3, 2, 5);
   g.restore();
@@ -6526,7 +6785,7 @@ function drawStatusBar(g, s) {
   g.fillStyle = C.statusLine;
   g.fillRect(0, M.statusH - 1, M.W, 1);
 
-  const title = ellipsize(g, s.title ?? '', FONTS.title, 220);
+  const title = ellipsize(g, s.title ?? '', FONTS.title, M.W - 100);
   g.font = FONTS.title;
   g.textAlign = 'center';
   g.textBaseline = 'alphabetic';
@@ -6537,7 +6796,7 @@ function drawStatusBar(g, s) {
 
   if (s.play === 'playing' || s.play === 'paused') drawPlayIcon(g, 8, ICON_Y, s.play);
   if (s.locked) drawLock(g, 22, 5);
-  drawBattery(g, 287, ICON_Y);
+  drawBattery(g, M.W - 33, ICON_Y);
   g.restore();
 }
 
@@ -6970,7 +7229,9 @@ __e.qconj = qconj;
   // ---------------------------------------------------------------- settings.js
   __defs['settings.js'] = function (__e) {
 // The assPod's settings, for this session only: kept in memory in SteamVR's page (never written to
-// disk, like the rest of LiquidAss), so a SteamVR restart starts from the defaults.
+// disk, like the rest of LiquidAss), so a SteamVR restart starts from the defaults. The exception, by
+// request: the body and its colours (model, finish, nanoFinish), which the plugin keeps across
+// launches (device/shell_ext/asspod.py PREFS) and hands back at each open.
 const { Emitter } = __req('util/emitter.js');
 
 const DEFAULTS = Object.freeze({
@@ -6982,7 +7243,9 @@ const DEFAULTS = Object.freeze({
   clicker: true,
   volume: 0.6,               // 0..1
   timeFormat: '12',          // '12' | '24'
-  finish: 'black',           // 'black' | 'white': the body
+  model: 'video',            // 'video' | 'nano': the body (models.js)
+  finish: 'black',           // the Video's colour: 'black' | 'white'
+  nanoFinish: 'silver',      // the nano's: 'silver' | 'green' | 'blue' | 'pink' | 'black' | 'red'
   ratings: {},               // trackId -> 0..5 (always replace the object, never mutate it)
   plays: {},                 // trackId -> [playCount, lastPlayed]
 });
@@ -7011,8 +7274,9 @@ __e.settings = settings;
   // ---------------------------------------------------------------- sg.js
   __defs['sg.js'] = function (__e) {
 __e.createSceneGraph = createSceneGraph;
-// The assPod's nodes in SteamVR's scene graph (systemui page): the assPod in one hand (the original
-// 3D model as SteamVR render models, device/asspod/model, with the live screen on a panel), and
+// The assPod's nodes in SteamVR's scene graph (systemui page): the assPod in one hand (its 3D model,
+// the Video or the nano, as SteamVR render models from device/asspod/model, or drawn by podd, with
+// the live screen on a panel), and
 // while it is out an invisible laser blocker where the menu was, with "(menu glyph) to close".
 //
 //   vsg-transform parent-path=/user/hand/<side>                the controller's pose
@@ -7039,12 +7303,12 @@ const MAIN = 'system.standalone::valve.steam.gamepadui.main';
 // The sheet, in the window's frame units (the window is 2.67 x 1.5 above its bottom centre; the bar
 // hangs below it): from under the bar to just over the top, a little wider than the window.
 const SHEET = { w: 3.2, h: 2.25, y: 0.55, z: 0.06 };   // the blocker
-const MODEL_W = 0.0618;          // m: the model's own width (tools/asspod-model, GEOMETRY.BODY)
+// The Video's geometry (model metres, tools/asspod-model GEOMETRY), the default when show() gets none.
+const VIDEO_GEO = { w: 0.0618, d: 0.0110, lcdCy: 0.0242, lcdW: 0.0508, winW: 0.0532, winH: 0.0405, wheelCy: -0.0240 };
+const VIDEO_SCALE = 0.085 / 0.0618;   // as shown (main.js FACE_WIDTH_M): DEFAULT_HOLD is for this body
 const OVERLAY_DZ = 0.00025;      // m (model units) in front of the plate: the screen panel (render-model body)
 const SCREEN_RECESS = 0.0004;    // m (model units) behind the plate's surface: the screen under podd's glass
 const VIDEO_BELOW = 0.0001;      // m (model units) behind the screen panel: podd's video picture
-const LCD_M = { cy: 0.0242, w: 0.0508 };   // the LCD on the model (face.js LCD, podd.cpp LCD_CY)
-const WIN_M = { w: 0.0532, h: 0.0405 };    // its window (face.js WINDOW, podd.cpp WIN)
 const CAPTION = { w: 1.0, y: 0.75, z: 0.075 };
 // The body in the hand (controller frame: x right, y up, -z forward): its rotation (w x y z) and
 // centre for the right hand, as placed with Reposition; the left hand mirrors it (defaultHold).
@@ -7209,24 +7473,22 @@ function createSceneGraph() {
   // stereoscopy: the left half of its rect to the left eye). podd renders each eye's view of the
   // model through each face; the faces write no depth, so the screen inside shows through podd's
   // glass. The faces match podd's (native/podd/podd.cpp makeLayout): centre, right, up, normal.
-  function poddBody(parent, b, rects, pd, video) {
-    const k = b.w / MODEL_W;
-    // The screen panel is the window only, centred on it like the video panel: SteamVR orders
-    // see-through panels by their centres, so two panels on one axis keep their order from any angle
-    // (offset centres swapped it head on, and the screen hid the video).
-    const ppm = rects.face.w / b.w;
-    const ww = WIN_M.w * k * ppm, wh = WIN_M.h * k * ppm;
-    const win = { x: rects.face.x + rects.face.w / 2 - ww / 2, y: rects.face.y + rects.face.h / 2 - LCD_M.cy * k * ppm - wh / 2, w: ww, h: wh };
+  function poddBody(parent, b, rects, pd, video, geo) {
+    const k = b.w / geo.w;
+    // The screen panel is the window only (rects.win: where face.js draws it), centred on it like the
+    // video panel: SteamVR orders see-through panels by their centres, so two panels on one axis keep
+    // their order from any angle (offset centres swapped it head on, and the screen hid the video).
+    const win = rects.win;
     if (video && Array.isArray(pd.video)) {
       // the video's picture (podd's video tile, the frame twice: one per eye) just under the screen,
       // which is clear over it but for the overlays; first, so the screen blends over it
       const [vx, vy, vw, vh] = pd.video;
-      const pic = vxf([0, LCD_M.cy * k, b.d / 2 - (SCREEN_RECESS + VIDEO_BELOW) * k]);
+      const pic = vxf([0, geo.lcdCy * k, b.d / 2 - (SCREEN_RECESS + VIDEO_BELOW) * k]);
       pic.appendChild(vnode('panel', {
         key: pd.key,
         uv_min: [r6(vx / pd.texW), r6(vy / pd.texH)],
         uv_max: [r6((vx + 2 * vw) / pd.texW), r6((vy + vh) / pd.texH)],
-        'meters-per-pixel': r6(LCD_M.w * k / vw),
+        'meters-per-pixel': r6(geo.lcdW * k / vw),
         origin: [0, 0],
         interactive: false,
         visibility: 0,
@@ -7237,8 +7499,8 @@ function createSceneGraph() {
       parent.appendChild(pic);
     }
     // recessed in the plate's opening, under podd's glass (which sits on the plate's surface)
-    const front = vxf([0, LCD_M.cy * k, b.d / 2 - SCREEN_RECESS * k]);
-    front.appendChild(pagePanel(win, b.w / rects.face.w, 'lgs-asspod-screen'));
+    const front = vxf([0, geo.lcdCy * k, b.d / 2 - SCREEN_RECESS * k]);
+    front.appendChild(pagePanel(win, geo.winW * k / win.w, 'lgs-asspod-screen'));
     parent.appendChild(front);
     const [hx, hy, hz] = pd.box;
     const faces = {
@@ -7275,8 +7537,23 @@ function createSceneGraph() {
 
   // The body without podd: the model's parts as SteamVR render models (fixed lighting), the screen
   // panel just in front of the plate.
-  function body(parent, b, rects, modelDir, finish) {
-    const k = b.w / MODEL_W;
+  function body(parent, b, rects, modelDir, finish, model, geo) {
+    const k = b.w / geo.w;
+    if (model === 'nano') {
+      // the nano's parts: its colour's aluminum, the shared caps, ports and well; the screen panel
+      // over its window
+      const scaled = vxf([0, 0, 0]);
+      scaled.setAttribute('scale', [k, k, k].map(r6).join(' '));
+      const wheel = finish === 'black' ? 'black' : 'white';
+      const parts = [`nano_shell_${finish}`, `nano_back_${finish}`, `nano_center_${finish}`, `nano_wheel_${wheel}`,
+        'nano_cap_top', 'nano_cap_bottom', 'nano_ports', 'nano_well'];
+      for (const name of parts) scaled.appendChild(vnode('rendermodel', { source: `${modelDir}/${name}/${name}.obj` }));
+      parent.appendChild(scaled);
+      const front = vxf([0, geo.lcdCy * k, b.d / 2 + OVERLAY_DZ * k]);
+      front.appendChild(pagePanel(rects.win, geo.winW * k / rects.win.w, 'lgs-asspod-screen'));
+      parent.appendChild(front);
+      return;
+    }
     const fin = finish === 'white' ? 'white' : 'black';
     const scaled = vxf([0, 0, 0]);
     scaled.setAttribute('scale', [k, k, k].map(r6).join(' '));
@@ -7294,15 +7571,24 @@ function createSceneGraph() {
 
   // The default place in the hand: where you put it with Reposition (2026-10-09, right hand), and
   // its mirror image across the controller's centre line for the left hand.
-  function defaultHold(side) {
+  // Another body keeps its wheel where the Video's is (over the stick), front faces level.
+  function defaultHold(side, b, geo) {
     const r = DEFAULT_HOLD;
-    if (side === 'right') return { rot: r.rot.slice(), centre: r.centre.slice() };
-    return { rot: [r.rot[0], r.rot[1], -r.rot[2], -r.rot[3]], centre: [-r.centre[0], r.centre[1], r.centre[2]] };
+    const h = side === 'right'
+      ? { rot: r.rot.slice(), centre: r.centre.slice() }
+      : { rot: [r.rot[0], r.rot[1], -r.rot[2], -r.rot[3]], centre: [-r.centre[0], r.centre[1], r.centre[2]] };
+    const k = b.w / geo.w;
+    const wheelV = [0, VIDEO_GEO.wheelCy * VIDEO_SCALE, VIDEO_GEO.d * VIDEO_SCALE / 2];
+    const wheelM = [0, geo.wheelCy * k, b.d / 2];
+    const d = qrot(h.rot, wheelV.map((v, i) => v - wheelM[i]));
+    h.centre = h.centre.map((v, i) => v + d[i]);
+    return h;
   }
 
   /**
    * Shows the assPod in `hand` ('left' | 'right') with the sheet over the menu.
-   * @param {{ hand: string, body: {w,h,d,r}, rects: {face, back, dim, text}, modelDir: string, finish: string,
+   * @param {{ hand: string, body: {w,h,d,r}, rects: {face, back, win, dim, text}, modelDir: string, finish: string,
+   *   model?: 'video'|'nano', geo?: {w, d, lcdCy, lcdW, winW, winH, wheelCy} (model metres),
    *   podd?: { key, texW, texH, box, tiles }, hold?: { rot, centre }, world?: { rot, centre } }} o
    *   podd: its layout (podd-out.json) when podd draws the body; hold: a place in the hand other than
    *   the default; world: pinned in the room (standing space) instead of on the hand
@@ -7313,14 +7599,15 @@ function createSceneGraph() {
     if (!attach()) return null;
     clearNodes();
     const side = o.hand === 'left' ? 'left' : 'right';
-    const { rot, centre } = o.hold && o.hold.rot && o.hold.centre ? o.hold : defaultHold(side);
+    const geo = o.geo || VIDEO_GEO;
+    const { rot, centre } = o.hold && o.hold.rot && o.hold.centre ? o.hold : defaultHold(side, o.body, geo);
     // pinned in the room (Reposition: the controller moves, the assPod stays), else on the hand
     const hand = o.world
       ? vxf(o.world.centre, o.world.rot)
       : vxf([0, 0, 0], null, { 'parent-path': '/user/hand/' + side });
     const hold = o.world ? vxf([0, 0, 0]) : vxf(centre, rot);
-    if (o.podd && o.podd.tiles && Array.isArray(o.podd.box)) poddBody(hold, o.body, o.rects, o.podd, o.video);
-    else body(hold, o.body, o.rects, o.modelDir, o.finish);
+    if (o.podd && o.podd.tiles && Array.isArray(o.podd.box)) poddBody(hold, o.body, o.rects, o.podd, o.video, geo);
+    else body(hold, o.body, o.rects, o.modelDir, o.finish, o.model || 'video', geo);
     hand.appendChild(hold);
     st.root.appendChild(hand);
     // the sheet and the caption, on Steam's window

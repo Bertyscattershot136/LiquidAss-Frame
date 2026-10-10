@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Export the assPod's 3D body into device/asspod/model/ (SteamVR render models).
+"""Export the assPods' 3D bodies into device/asspod/model/ (SteamVR render models).
 
-The body is the original procedural model (tools/asspod-model/asspod-model.js, three.js). Its
-exporter runs in a browser: this serves the repo on http://127.0.0.1:8766/, opens
-tools/asspod-model/export.html, and writes the files the page sends back (only under
-device/asspod/model/). Ctrl+C when it says "done".
+The bodies are procedural three.js models: the Video (tools/asspod-model/asspod-model.js) and the
+nano (tools/nano2-model/nano2-model.js). Their exporters run in a browser: this serves the repo on
+http://127.0.0.1:8766/, opens the exporter page, and writes the files the page sends back (only
+under device/asspod/model/). Ctrl+C when it says "done".
 
-  python tools/build_asspod_model.py [--no-open]
+  python tools/build_asspod_model.py [--no-open] [--page tools/nano2-model/export.html]
 """
 import base64
 import http.server
@@ -52,7 +52,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 def main():
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    url = f"http://127.0.0.1:{PORT}/tools/asspod-model/export.html"
+    page = "tools/asspod-model/export.html"
+    if "--page" in sys.argv[1:]:
+        page = sys.argv[sys.argv.index("--page") + 1]
+    url = f"http://127.0.0.1:{PORT}/{page}"
     print(f"serving {ROOT}; open {url}")
     if "--no-open" not in sys.argv[1:]:
         webbrowser.open(url)

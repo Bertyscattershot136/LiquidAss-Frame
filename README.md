@@ -50,6 +50,8 @@ Press the paintbrush button at the right end of the dashboard bar. Its panel set
 
 Press the music note button on the dashboard bar, just left of the paintbrush. The assPod appears in the hand you pressed it with.
 
+**assPod Model** on its main menu switches the body: **Video Gen 1** (the original) or **Nano Gen 2**, in anodized aluminum with white end caps. The nano has the same menus, laid out for its smaller screen with larger text (six rows, like the real one), and it plays no video. **Color** lists the current body's finishes: Black and White for the Video; Silver, Green, Blue, Pink, Black and (PRODUCT)RED for the nano. The model and colours you pick are kept across launches.
+
 ## Nothing persists
 
 **The theme is never written to disk.** `lgs` injects the stylesheet into the *running* Steam client through its local devtools socket (`127.0.0.1:8080`; Steam on the Frame runs with `-cef-enable-debugging`). Any of these brings back the stock UI:
@@ -60,15 +62,16 @@ Press the music note button on the dashboard bar, just left of the paintbrush. T
 
 Nothing starts at boot. There are no systemd units, autostart entries or Steam file patches.
 
-Only two things stay installed, so the toggle is there after a reboot, plus one file of your own:
+Only two things stay installed, so the toggle is there after a reboot, plus two files of your own:
 
 | Path | What it is |
 |---|---|
 | `~/.local/share/applications/glass-shell.desktop` | The "LiquidAss" entry in + › Launch Program |
 | `~/.local/share/glass-shell/` | The toggle script and the theme files it reads |
-| `~/.config/glass-shell/tune.json` | Your glass settings from the paintbrush button on the bar (colour, intensity, refraction, frost, highlights). Written only when you change them; **Reset to default** in that panel deletes it. The one exception to "nothing persists", by request |
+| `~/.config/glass-shell/tune.json` | Your glass settings from the paintbrush button on the bar (colour, intensity, refraction, frost, highlights). Written only when you change them; **Reset to default** in that panel deletes it. An exception to "nothing persists", by request |
+| `~/.config/glass-shell/asspod.json` | The assPod model and colours you picked. Written only when you change them. The other exception, by request |
 
-The [uninstall](#uninstall) command (or `python glass.py uninstall`) removes all three. (The install paths keep the project's original `glass-shell` name, so existing installs carry over.)
+The [uninstall](#uninstall) command (or `python glass.py uninstall`) removes all of them. (The install paths keep the project's original `glass-shell` name, so existing installs carry over.)
 
 ## From the PC
 

@@ -4,6 +4,11 @@
 //
 // The static body is drawn once per finish into a layer; a frame blits it, then the screen and the
 // wheel state. draw() returns false when nothing changed, so the page repaints only on change.
+//
+// The nano (models.js) has only its screen here, in its window, filling most of the canvas: podd or
+// its render models draw the rest, and the page shows just the window's rect (windowRect('nano')).
+
+import { MODELS } from './models.js';
 
 export const BODY = { w: 61.8, h: 103.5, corner: 6.5 };
 const LCD = { cy: 24.2, w: 50.8, h: 38.1 };
@@ -52,6 +57,41 @@ export function createFace(canvas, screen, opts = {}) {
 
   const lcd = { x: X(-LCD.w / 2), y: Y(LCD.cy + LCD.h / 2), w: LCD.w * k, h: LCD.h * k };
   const wc = { x: X(0), y: Y(WHEEL.cy) };
+  // the nano's window: 90% of the canvas's width, centred
+  const NANO = MODELS.nano;
+  const nk = W * 0.9 / NANO.win.w;                       // px per mm
+  const nanoWin = { w: NANO.win.w * nk, h: NANO.win.h * nk };
+  nanoWin.x = (W - nanoWin.w) / 2;
+  nanoWin.y = (H - nanoWin.h) / 2;
+  const nanoLcd = { w: NANO.lcd.w * nk, h: NANO.lcd.h * nk };
+  nanoLcd.x = (W - nanoLcd.w) / 2;
+  nanoLcd.y = (H - nanoLcd.h) / 2;
+
+  /** The model's screen window in this canvas (px): what the page shows over the window. */
+  function windowRect(model) {
+    if (model === 'nano') return { ...nanoWin };
+    return { x: X(-WINDOW.w / 2), y: Y(LCD.cy + WINDOW.h / 2), w: WINDOW.w * k, h: WINDOW.h * k };
+  }
+
+  // The nano: its LCD in a black window (rounded like the nano's), the backlight and the glass.
+  function drawNano(s) {
+    roundRect(g, nanoWin.x, nanoWin.y, nanoWin.w, nanoWin.h, 0.6 * nk);
+    g.fillStyle = '#000';
+    g.fill();
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(screen, nanoLcd.x, nanoLcd.y, nanoLcd.w, nanoLcd.h);
+    const veil = 1 - Math.max(0, Math.min(1, s.backlight));
+    if (veil > 0.001) {
+      g.fillStyle = `rgba(0,0,0,${veil})`;
+      g.fillRect(nanoLcd.x, nanoLcd.y, nanoLcd.w, nanoLcd.h);
+    }
+    const refl = g.createLinearGradient(nanoLcd.x, nanoLcd.y, nanoLcd.x + nanoLcd.w, nanoLcd.y + nanoLcd.h);
+    refl.addColorStop(0, 'rgba(255,255,255,0.07)');
+    refl.addColorStop(0.5, 'rgba(255,255,255,0)');
+    g.fillStyle = refl;
+    g.fillRect(nanoLcd.x, nanoLcd.y, nanoLcd.w, nanoLcd.h);
+  }
 
   function bodyLayer(finish) {
     let c = layers.get(finish);
@@ -204,12 +244,13 @@ export function createFace(canvas, screen, opts = {}) {
     if (marker !== target) {
       marker = target > marker ? Math.min(1, marker + dt / MARKER_IN) : Math.max(0, marker - dt / MARKER_OUT);
     }
-    const key = [s.finish, Math.round(s.backlight * 100), s.pressed || '', marker > 0 ? Math.round(s.angle * 200) : -1,
+    const key = [s.model || 'video', s.finish, Math.round(s.backlight * 100), s.pressed || '', marker > 0 ? Math.round(s.angle * 200) : -1,
       Math.round(marker * 20), s.reflVersion || 0, s.screenOnly ? 1 : 0, s.videoUnder ? 1 : 0].join('|');
     if (!s.screenDirty && key === last) return false;
     last = key;
     const f = FINISHES[s.finish] || FINISHES.black;
     g.clearRect(0, 0, W, H);
+    if (s.model === 'nano') { drawNano(s); return true; }
     if (overlay) {
       roundRect(g, X(-WINDOW.w / 2), Y(LCD.cy + WINDOW.h / 2), WINDOW.w * k, WINDOW.h * k, WINDOW.r * k);
       g.fillStyle = '#000';
@@ -252,7 +293,7 @@ export function createFace(canvas, screen, opts = {}) {
     return true;
   }
 
-  return { draw, get animating() { return marker > 0 && marker < 1; } };
+  return { draw, windowRect, get animating() { return marker > 0 && marker < 1; } };
 }
 
 /** The mirror-polished steel back with the peach engraved in it (static: drawn once). Polished

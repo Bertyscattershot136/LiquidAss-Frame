@@ -1,5 +1,6 @@
 // assPod: a 5th-generation-style music player in your hand in the SteamVR menu, playing the VLC
-// media library. This is its half inside SteamVR's systemui page (installed by the daemon as the
+// media library. The main menu's assPod Model swaps the body for a 2nd-generation nano (models.js):
+// the same OS, scaled onto its smaller screen, and no video. This is its half inside SteamVR's systemui page (installed by the daemon as the
 // page script device/vr/systemui.asspod.js, built from these sources by tools/build_asspod.py);
 // the daemon's plugin device/shell_ext/asspod.py runs VLC and reads the library.
 //
@@ -12,8 +13,9 @@
 // Controls: both sticks turn the click wheel; a stick click presses the wheel button under it
 // (centred: the centre button). A is the centre button, B is the wheel's Menu, and the hamburger
 // (menu) button puts the assPod away; so does closing the SteamVR menu. The right controller's
-// buttons are read here from its model; the left one's (A and B in the same places) come from Steam
-// through the plugin (btn()). Music keeps playing: the player keeps running here at a few Hz, and
+// buttons are read here from its model, Steam's A / B / hamburger come through the plugin (btn())
+// otherwise. Both sticks act alike: only their models are read (Steam's d-pad directions, which the
+// left stick's tilts also send, are not relayed). Music keeps playing: the player keeps running here at a few Hz, and
 // the plugin keeps VLC up while anything plays and stops it when the assPod is away and nothing plays.
 //
 // The plugin talks to this page only through the returned api: poll() drains the commands for VLC
@@ -33,6 +35,7 @@ import { createFace, createBack, BODY } from './face.js';
 import { drawPeachSilhouette } from './brand/peach.js';
 import { createReflector, pose, qmul, qrot, qconj } from './reflect.js';
 import { createSceneGraph } from './sg.js';
+import { MODELS, currentModel, currentFinish, bodyMetres } from './models.js';
 
 const FACE_W = 476;                        // px; the body is 61.8 x 103.5 mm
 const FACE_H = Math.round(FACE_W * BODY.h / BODY.w);
@@ -40,6 +43,10 @@ const FACE_WIDTH_M = 0.085;                // shown about 1.4x the real body, fo
 const BODY_M = {                           // the 3D body in metres, at that scale
   w: FACE_WIDTH_M, h: FACE_WIDTH_M * BODY.h / BODY.w, d: FACE_WIDTH_M * 11 / BODY.w, r: FACE_WIDTH_M * BODY.corner / BODY.w,
 };
+const NANO_M = bodyMetres(MODELS.nano);    // the nano, at its own scale
+// a model's geometry for the scene graph (model metres)
+const geoOf = (m) => ({ w: m.body.w / 1000, d: m.body.d / 1000, lcdCy: m.lcd.cy / 1000, lcdW: m.lcd.w / 1000,
+  winW: m.win.w / 1000, winH: m.win.h / 1000, wheelCy: m.wheel.cy / 1000 });
 const BACK_W = 238;                        // px: the steel back's live reflection (half the face's resolution)
 const BACK_H = Math.round(BACK_W * BODY.h / BODY.w);
 const REFLECT_EVERY = 2;                   // frames between reflection updates (about 30 a second)
@@ -151,9 +158,15 @@ export default function install(ctx) {
   library.onLoad(() => { art.clear(); os.ctx.popToRoot(); os.invalidate(); });
   // the EQ follows the setting (VLC's preset by name)
   settings.on('change', ({ key }) => { if (key === 'eq' || key === '*') send({ op: 'eq', name: settings.get('eq') }); });
-  // the body's colour: podd follows the finish in the poll; the render-model body is rebuilt
+  // The body: podd follows the model and its finish in the poll (one layout holds both); the scene
+  // graph is rebuilt for the other body's screen panel and place in the hand, or for the render
+  // models' colour. (Picking the nano stops a video: os/screens/main-menu.js.)
   settings.on('change', ({ key }) => {
-    if ((key === 'finish' || key === '*') && st.open && !st.podd) st.holdPose = sg.show(showOpts(st.hand, st.world)) || st.holdPose;
+    if (!st.open) return;
+    if (key === 'model' || key === '*' || (!st.podd && (key === 'finish' || key === 'nanoFinish'))) {
+      if (key === 'model' && st.world) unpin(false);
+      st.holdPose = sg.show(showOpts(st.hand, st.world)) || st.holdPose;
+    }
   });
 
   // ---------------------------------------------------------------- state
@@ -246,11 +259,13 @@ export default function install(ctx) {
       videoMode();
       const screenDirty = os.render(t);
       // the painted reflections only without podd (podd shades the glass and the steel itself)
-      if (!st.podd && st.frames % REFLECT_EVERY === 0 && reflector.update(st.hand, st.holdPose)) back.draw(reflector.back, reflector.version);
+      const model = currentModel(settings).id;
+      const painted = !st.podd && model === 'video';   // the nano's render models carry their own back
+      if (painted && st.frames % REFLECT_EVERY === 0 && reflector.update(st.hand, st.holdPose)) back.draw(reflector.back, reflector.version);
       const ws = wheel.state;
       face.draw({
-        reflection: !st.podd && reflector.version ? reflector.front : null, reflVersion: reflector.version, screenOnly: !!st.podd, videoUnder: !!st.videoMode,
-        finish: settings.get('finish'), backlight: os.backlight, screenDirty,
+        reflection: painted && reflector.version ? reflector.front : null, reflVersion: reflector.version, screenOnly: !!st.podd, videoUnder: !!st.videoMode,
+        model, finish: currentFinish(settings), backlight: os.backlight, screenDirty,
         touching: ws.touching, angle: ws.angle, pressed: ws.pressedPart || (st.keys.select ? 'select' : st.keys.menu ? 'menu' : null), now: t,
       });
     } catch (err) { note(err); }
@@ -268,9 +283,15 @@ export default function install(ctx) {
     if (player.state === 'playing') st.bgTimer = setTimeout(background, BACKGROUND_MS);
   }
 
+  // Reposition's places are kept per body: the Video's under the hand's name, the nano's as nano-<hand>
+  const holdKey = (hand) => (currentModel(settings).id === 'video' ? hand : `${currentModel(settings).id}-${hand}`);
+
   function showOpts(hand, world) {
-    return { hand, body: BODY_M, rects, modelDir: st.modelDir, finish: settings.get('finish'), podd: st.podd,
-      hold: st.holds[hand] || null, world: world || null, video: !!st.videoMode };
+    const m = currentModel(settings);
+    const wr = face.windowRect(m.id);
+    rects.win = { x: rects.face.x + wr.x, y: rects.face.y + wr.y, w: wr.w, h: wr.h };
+    return { hand, body: m.id === 'video' ? BODY_M : NANO_M, rects, modelDir: st.modelDir, model: m.id, geo: geoOf(m),
+      finish: currentFinish(settings), podd: st.podd, hold: st.holds[holdKey(hand)] || null, world: world || null, video: !!st.videoMode };
   }
 
   // A video on the screen with podd: podd shows its picture (the daemon's frames, full rate) in a panel
@@ -302,7 +323,7 @@ export default function install(ctx) {
       const hp = pose('/user/hand/' + st.hand);
       if (hp) {
         const inv = qconj(hp.q);
-        st.holds[st.hand] = {
+        st.holds[holdKey(st.hand)] = {
           rot: qmul(inv, st.world.rot),
           centre: qrot(inv, st.world.centre.map((v, i) => v - hp.t[i])),
         };
@@ -317,6 +338,7 @@ export default function install(ctx) {
     return {
       id: 'reposition',
       title: 'Reposition',
+      adaptive: true,
       keepAwake: true,
       enter() { if (!pin()) note('reposition: no hand pose'); },
       exit() { if (st.world) unpin(false); },
@@ -325,7 +347,7 @@ export default function install(ctx) {
         if (e.type !== 'press') return e.type === 'release' ? false : undefined;
         if (e.part === 'select') return done(() => unpin(true));
         if (e.part === 'menu') return done(() => unpin(false));
-        if (e.part === 'play') return done(() => { st.holds[st.hand] = null; unpin(false); });
+        if (e.part === 'play') return done(() => { st.holds[holdKey(st.hand)] = null; unpin(false); });
         return false;
       },
       draw(g, r) {
@@ -379,6 +401,10 @@ export default function install(ctx) {
       for (const [p, t] of Object.entries(opts.resume)) if (Number.isFinite(t)) resume.set(p, t);
     }
     if (opts.holds && typeof opts.holds === 'object') st.holds = Object.assign({ left: null, right: null }, opts.holds);
+    // the body and colours picked last time (the plugin keeps them: device/shell_ext/asspod.py PREFS)
+    if (opts.prefs && typeof opts.prefs === 'object') {
+      for (const key of ['model', 'finish', 'nanoFinish']) if (typeof opts.prefs[key] === 'string') settings.set(key, opts.prefs[key]);
+    }
     st.world = null;
     st.videoMode = false;
     art.videoExternal = false;
@@ -436,7 +462,8 @@ export default function install(ctx) {
   function status() {
     return {
       ok: true, open: st.open, hand: st.hand, closedBy: st.closedBy, loading: st.loading,
-      hold: st.holdPose || null, bodyScale: BODY_M.w / 0.0618, finish: settings.get('finish'), podd: !!st.podd,
+      hold: st.holdPose || null, bodyScale: BODY_M.w / 0.0618, nanoScale: MODELS.nano.scale, model: currentModel(settings).id,
+      finish: currentFinish(settings), podd: !!st.podd,
       player: { state: player.state, current: player.current ? { id: player.current.id, title: player.current.title } : null,
         position: Math.round((player.position || 0) * 10) / 10, queue: player.queue.length, volume: player.volume },
       library: { tracks: library.tracks.length, albums: library.albums.length, videos: library.videos.length },
@@ -452,6 +479,7 @@ export default function install(ctx) {
     os.ctx.push({
       id: 'notice',
       title: String(title || 'assPod'),
+      adaptive: true,
       handle(e) {
         if (e.type === 'press' && (e.part === 'select' || e.part === 'menu')) { os.ctx.pop(); return true; }
         return e.type === 'scroll' ? false : undefined;
@@ -493,7 +521,8 @@ export default function install(ctx) {
         playing: player.state === 'playing', state: player.state,
         current: player.current ? player.current.path : null,
         volume: player.volume, eq: settings.get('eq'),
-        hold: st.holdPose || null, world: st.world, holds: st.holds, finish: settings.get('finish'),
+        hold: st.holdPose || null, world: st.world, holds: st.holds, model: currentModel(settings).id, finish: currentFinish(settings),
+        prefs: { model: currentModel(settings).id, finish: settings.get('finish'), nanoFinish: settings.get('nanoFinish') },
         position: Math.round((player.position || 0) * 1000) / 1000,
         video: player.current && player.current.kind === 'video' && os.ctx.top()?.id === 'videoplayer' && st.open,
       };

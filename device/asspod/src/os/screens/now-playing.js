@@ -2,23 +2,40 @@
 // artist / album on the right, and a progress bar with elapsed and remaining time.
 // Center click cycles progress -> scrubber -> rating; the wheel sets volume, seeks or rates.
 
-import { SCREEN_SCALE } from '../../config.js';
+import { SCREEN_W, SCREEN_SCALE } from '../../config.js';
+import { M } from '../theme.js';
 
 // ---------------------------------------------------------------- layout
 
-const POS = { x: 10, y: 40 };
-const ART = { x: 10, y: 48, s: 112 };
-const TEXT = { x: 132, w: 180, title: 82, artist: 102, album: 122 };
-const BAR = { x: 10, y: 182, w: 300, h: 10 };
-const TIME_Y = 208;
-const STARS = { cx: 160, cy: 187 };
-const VOLUME = { x: 10, y: 180, w: 300 };
+// The Video's 320 x 240 layout, and the nano's on its 240 x 180 screen (the same text, less room:
+// smaller art and a shorter bar). relayout() picks the one for the current logical screen.
+const LAYOUTS = {
+  320: {
+    POS: { x: 10, y: 40 }, ART: { x: 10, y: 48, s: 112 }, TEXT: { x: 132, w: 180, title: 82, artist: 102, album: 122 },
+    BAR: { x: 10, y: 182, w: 300, h: 10 }, TIME_Y: 208, STARS: { cx: 160, cy: 187 }, VOLUME: { x: 10, y: 180, w: 300 },
+    GLYPH: { right: 310, w: 12, h: 9, gap: 5 },
+  },
+  240: {
+    POS: { x: 8, y: 38 }, ART: { x: 8, y: 46, s: 80 }, TEXT: { x: 96, w: 136, title: 66, artist: 84, album: 102 },
+    BAR: { x: 8, y: 136, w: 224, h: 9 }, TIME_Y: 160, STARS: { cx: 120, cy: 141 }, VOLUME: { x: 8, y: 134, w: 224 },
+    GLYPH: { right: 232, w: 12, h: 9, gap: 5 },
+  },
+};
+let POS, ART, TEXT, BAR, TIME_Y, STARS, VOLUME, GLYPH, ART_PX;
+let laidOut = 0;
+function relayout() {
+  if (laidOut === M.W) return;
+  laidOut = M.W;
+  ({ POS, ART, TEXT, BAR, TIME_Y, STARS, VOLUME, GLYPH } = LAYOUTS[M.W] || LAYOUTS[320]);
+  // the cover is resampled to the art box's backing-store size (the canvas is 640 px wide)
+  ART_PX = Math.round(ART.s * SCREEN_W * SCREEN_SCALE / M.W);
+}
+relayout();
 const VOLUME_STEPS = 16;
 const SCRUB_STEP_S = 2;
 const SCRUB_FAST_MS = 120;   // steps closer than this count as "scrolling fast"
 
 const MODES = ['progress', 'scrub', 'rating'];
-const GLYPH = { right: 310, w: 12, h: 9, gap: 5 };   // shuffle / repeat marks, right of "n of N"
 
 /** Grey square with a beamed note, for items without cover art. */
 function drawPlaceholderArt(g, x, y, s) {
@@ -94,14 +111,14 @@ function drawRepeatGlyph(g, x, y, color, one, oneFont) {
 
 // The 256px cover is resampled once per album to the art box's backing-store size (224px), so
 // each 4 Hz (or 40 fps marquee) redraw is a 1:1 blit instead of a high-quality downscale.
-const ART_PX = ART.s * SCREEN_SCALE;
 let artKey = null;
+let artPx = 0;
 let artSrc = null;
 let artCanvas = null;
 
 function scaledCover(src, key) {
   // The source canvas counts too: art.clear() redraws covers (late web fonts) as new canvases.
-  if (key === artKey && src === artSrc && artCanvas) return artCanvas;
+  if (key === artKey && src === artSrc && artCanvas && artPx === ART_PX) return artCanvas;
   if (typeof document === 'undefined') return src;
   artCanvas ??= document.createElement('canvas');
   artCanvas.width = artCanvas.height = ART_PX;
@@ -111,6 +128,7 @@ function scaledCover(src, key) {
   g.drawImage(src, 0, 0, ART_PX, ART_PX);
   artKey = key;
   artSrc = src;
+  artPx = ART_PX;
   return artCanvas;
 }
 
@@ -157,6 +175,7 @@ export function createNowPlaying(ctx) {
 
   const screen = {
     id: 'nowplaying',
+    adaptive: true,
     title: 'Now Playing',
     // Only a moving playhead needs the 4 Hz refresh; paused, the screen is static (no uploads).
     get refreshMs() { return player.state === 'playing' || player.seeking ? 250 : 0; },
@@ -176,6 +195,7 @@ export function createNowPlaying(ctx) {
     },
 
     handle(e) {
+      relayout();
       const now = ctx.now();
       const cur = player.current;
       if (e.type === 'press' && e.part === 'select') {
@@ -216,6 +236,7 @@ export function createNowPlaying(ctx) {
     },
 
     draw(g, r, now) {
+      relayout();
       g.fillStyle = C.bg;
       g.fillRect(r.x, r.y, r.w, r.h);
       const cur = player.current;
@@ -310,6 +331,7 @@ export function createNowPlaying(ctx) {
     },
 
     animating(now) {
+      relayout();
       // One redraw when the volume overlay or a scrubber/rating mode times out, even when paused.
       if (volumeUntil && drawnAt < volumeUntil && now >= volumeUntil) return true;
       const modeEnd = modeAt + ANIM.npModeTimeoutMs;

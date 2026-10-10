@@ -57,6 +57,14 @@ PODD = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.real
 PODD_PREBUILT = os.path.join(os.path.dirname(PODD), "prebuilt", "podd")
 PODD_SPEC = "/dev/shm/lgs/podd.json"
 PODD_OUT = "/dev/shm/lgs/podd-out.json"
+# the bodies podd draws and their colours (device/asspod/src/models.js, native/podd/podd.cpp)
+PODD_FINISHES = {"video": ("black", "white"), "nano": ("silver", "green", "blue", "pink", "black", "red")}
+NANO_SCALE = 1.3125                       # the nano as shown (models.js MODELS.nano.scale)
+# The body you picked (assPod Model) and each body's colour, kept across launches beside the glass
+# tune (lgs.TUNE): {"model": "video"|"nano", "finish": <the Video's>, "nanoFinish": <the nano's>}.
+# Written only when you change them; uninstall removes it with the folder.
+PREFS = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "glass-shell", "asspod.json")
+PREFS_DEFAULT = {"model": "video", "finish": "black", "nanoFinish": "silver"}
 API = "window.__LGS_VRX && window.__LGS_VRX.asspod && window.__LGS_VRX.asspod.api"
 HOME = os.path.expanduser("~")
 FLATPAK_VLC = "org.videolan.VLC"
@@ -597,14 +605,16 @@ async def _poll_loop(ctx):
                 s["open"], s["playing"] = bool(r.get("open")), bool(r.get("playing"))
                 if isinstance(r.get("holds"), dict):
                     s["holds"] = r["holds"]          # Reposition's places, kept for the next open
+                _prefs_note(ctx, r.get("prefs"))     # the body and colours you picked, kept across launches
                 # podd follows the body: on the hand (hold) or pinned in the room while repositioning (world)
                 if s["open"] and s.get("podd") is not None and s["podd"].returncode is None:
                     h, w = r.get("hold") or {}, r.get("world")
-                    fin = r.get("finish") if r.get("finish") in ("black", "white") else "black"
-                    want = (json.dumps(h, sort_keys=True), json.dumps(w, sort_keys=True), fin)
+                    model = r.get("model") if r.get("model") in PODD_FINISHES else "video"
+                    fin = r.get("finish") if r.get("finish") in PODD_FINISHES[model] else PODD_FINISHES[model][0]
+                    want = (json.dumps(h, sort_keys=True), json.dumps(w, sort_keys=True), model, fin)
                     if want != s.get("podd_pose") and h.get("rot") and h.get("centre"):
                         s["podd_pose"] = want
-                        _podd_spec(s, rot=h["rot"], centre=h["centre"], world=w, finish=fin)
+                        _podd_spec(s, rot=h["rot"], centre=h["centre"], world=w, model=model, finish=fin)
                 if s["open"]:
                     s["hand"] = r.get("hand")
                 if was_open and not s["open"]:
@@ -1081,7 +1091,8 @@ def _model_dir():
 # ------------------------------------------------------------------ podd (native/podd: the body with real shaders)
 
 def _podd_spec(s, **kw):
-    spec = dict(s.get("podd_spec") or {"open": False, "hand": "right", "scale": 0.085 / 0.0618, "finish": "black"})
+    spec = dict(s.get("podd_spec") or {"open": False, "hand": "right", "scale": 0.085 / 0.0618, "nanoScale": NANO_SCALE,
+                                       "model": "video", "finish": "black"})
     spec.update(kw)
     s["podd_spec"] = spec
     os.makedirs(os.path.dirname(PODD_SPEC), exist_ok=True)
@@ -1113,7 +1124,7 @@ def _podd_kill_strays():
         time.sleep(0.05)
 
 
-async def _podd_start(ctx, model_dir, scale, finish):
+async def _podd_start(ctx, model_dir, scale, finish, nano_scale=NANO_SCALE, model="video"):
     """podd up with its layout (podd-out.json), or None (then SteamVR's render models draw the body)."""
     s = _st(ctx)
     if not os.access(PODD, os.X_OK) and os.path.isfile(PODD_PREBUILT):
@@ -1125,7 +1136,7 @@ async def _podd_start(ctx, model_dir, scale, finish):
             _err(ctx, f"podd: {e!r}")
     if not os.access(PODD, os.X_OK):
         return None
-    _podd_spec(s, open=False, scale=scale, finish=finish)
+    _podd_spec(s, open=False, scale=scale, nanoScale=nano_scale, model=model, finish=finish)
     p = s.get("podd")
     # a podd older than its binary (a rebuild) is replaced
     if p is not None and p.returncode is None and os.path.getmtime(PODD) > s.get("podd_t0", 0):
@@ -1177,6 +1188,49 @@ async def _podd_stop(ctx):
             pass
 
 
+# ------------------------------------------------------------------ the body you picked, kept
+
+def _prefs_clean(p):
+    """The model and colours from `p`, each checked; the defaults for anything missing or wrong."""
+    p = p if isinstance(p, dict) else {}
+    out = dict(PREFS_DEFAULT)
+    if p.get("model") in PODD_FINISHES:
+        out["model"] = p["model"]
+    if p.get("finish") in PODD_FINISHES["video"]:
+        out["finish"] = p["finish"]
+    if p.get("nanoFinish") in PODD_FINISHES["nano"]:
+        out["nanoFinish"] = p["nanoFinish"]
+    return out
+
+
+def _prefs_load(s):
+    if s.get("prefs") is None:
+        try:
+            with open(PREFS, encoding="utf-8") as f:
+                s["prefs"] = _prefs_clean(json.load(f))
+        except (OSError, ValueError):
+            s["prefs"] = dict(PREFS_DEFAULT)
+    return s["prefs"]
+
+
+def _prefs_note(ctx, p):
+    """The page's current model and colours (each poll): saved when they changed."""
+    s = _st(ctx)
+    if not isinstance(p, dict):
+        return
+    want = _prefs_clean(p)
+    if want == _prefs_load(s):
+        return
+    s["prefs"] = want
+    try:
+        os.makedirs(os.path.dirname(PREFS), exist_ok=True)
+        with open(PREFS + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(want, f)
+        os.replace(PREFS + ".tmp", PREFS)
+    except OSError as e:
+        _err(ctx, f"prefs: {e!r}")
+
+
 # ------------------------------------------------------------------ actions
 
 async def _open(ctx):
@@ -1186,8 +1240,12 @@ async def _open(ctx):
         raise RuntimeError("the assPod page script is not installed in SteamVR (systemui)")
     if not st.get("open"):
         model_dir = _model_dir()
-        podd = await _podd_start(ctx, model_dir, st.get("bodyScale") or 0.085 / 0.0618, st.get("finish") or "black")
-        r = await _page(ctx, f"A.open({json.dumps({'modelDir': model_dir, 'podd': podd, 'holds': s.get('holds'), 'resume': _resume(s)})})")
+        prefs = _prefs_load(s)
+        model = prefs["model"]
+        podd = await _podd_start(ctx, model_dir, st.get("bodyScale") or 0.085 / 0.0618,
+                                 prefs["nanoFinish"] if model == "nano" else prefs["finish"],
+                                 st.get("nanoScale") or NANO_SCALE, model)
+        r = await _page(ctx, f"A.open({json.dumps({'modelDir': model_dir, 'podd': podd, 'holds': s.get('holds'), 'resume': _resume(s), 'prefs': prefs})})")
         if not r or not r.get("open"):
             await _podd_stop(ctx)
             raise RuntimeError(f"open failed: {(r or {}).get('error')}")

@@ -1,8 +1,10 @@
 // assPod OS core: screen stack, 220 ms slide transitions, status bar, backlight timer and dimming,
 // sleep/wake, the boot logo, the default button behavior, and render throttling for the screen
-// texture. Draws the 320x240 logical LCD onto the 640x480 canvas that main.js uploads as a texture.
+// texture. Draws the logical LCD (320x240 on the Video, 240x180 on the nano) onto the 640x480 canvas
+// that main.js uploads as a texture.
 
 import { SCREEN_W } from '../config.js';
+import { currentModel } from '../models.js';
 import { settings as defaultSettings } from '../settings.js';
 import { drawPeachSilhouette } from '../brand/peach.js';
 import * as theme from './theme.js';
@@ -11,7 +13,7 @@ import { createMenu } from './menu.js';
 import { createMainMenu } from './screens/main-menu.js';
 import { createNowPlaying } from './screens/now-playing.js';
 
-const { M, C, ANIM } = theme;
+const { M, C, ANIM, setScreenSize } = theme;
 
 /**
  * @typedef {import('../input/clickwheel.js').WheelEvent} WheelEvent
@@ -44,8 +46,9 @@ const { M, C, ANIM } = theme;
 
 // ---------------------------------------------------------------- constants
 
-const CONTENT = Object.freeze({ x: 0, y: M.statusH, w: M.W, h: M.H - M.statusH });
-const FULL = Object.freeze({ x: 0, y: 0, w: M.W, h: M.H });
+// the content area under the status bar, and the whole screen (the logical size can change: models.js)
+const content = () => ({ x: 0, y: M.statusH, w: M.W, h: M.H - M.statusH });
+const full = () => ({ x: 0, y: 0, w: M.W, h: M.H });
 const FRAME_MS = 1000 / ANIM.maxFps;
 // rAF timestamps jitter by a fraction of a ms; without slack a 25 ms cap would skip a frame at 80 Hz.
 const FRAME_SLACK_MS = 1;
@@ -74,7 +77,12 @@ function normKey(s) {
  */
 export function createOS({ canvas, player, library, art, apps, settings = defaultSettings, boot: bootEnabled = false }) {
   const g = canvas.getContext('2d');
-  const scale = canvas.width / SCREEN_W;
+  // The body's logical screen (models.js): the canvas stays the same size and the scale follows.
+  const applyModel = () => { const m = currentModel(settings); setScreenSize(m.screen.w, m.screen.h); };
+  applyModel();
+  if (typeof settings.on === 'function') {
+    settings.on('change', ({ key }) => { if (key === 'model' || key === '*') { applyModel(); dirty = DIRTY_NOW; } });
+  }
 
   /** @type {Screen[]} */
   const stack = [];
@@ -360,8 +368,18 @@ export function createOS({ canvas, player, library, art, apps, settings = defaul
   }
 
   const reported = new WeakSet();
+  // Menus and the screens marked `adaptive` lay themselves out on the current logical screen; the
+  // rest (the games, the clock, Cover Flow...) are drawn for the Video's 320 x 240 and scaled to fit.
   function drawScreen(s, r, now) {
     try {
+      if (!s.isMenu && !s.adaptive && M.W !== SCREEN_W) {
+        const k = M.W / SCREEN_W;
+        g.save();
+        g.scale(k, k);
+        s.draw(g, { x: r.x / k, y: r.y / k, w: r.w / k, h: r.h / k }, now);
+        g.restore();
+        return;
+      }
       s.draw(g, r, now);
     } catch (err) {
       // One broken screen must not take the whole OS down every frame; report it once.
@@ -373,12 +391,13 @@ export function createOS({ canvas, player, library, art, apps, settings = defaul
     if (dx <= -M.W || dx >= M.W) return;
     g.save();
     g.beginPath();
-    g.rect(CONTENT.x, CONTENT.y, CONTENT.w, CONTENT.h);
+    const r = content();
+    g.rect(r.x, r.y, r.w, r.h);
     g.clip();
     g.translate(dx, 0);
     g.fillStyle = C.bg;
-    g.fillRect(CONTENT.x, CONTENT.y, CONTENT.w, CONTENT.h);
-    drawScreen(s, CONTENT, now);
+    g.fillRect(r.x, r.y, r.w, r.h);
+    drawScreen(s, r, now);
     g.restore();
   }
 
@@ -397,7 +416,7 @@ export function createOS({ canvas, player, library, art, apps, settings = defaul
         g.fillStyle = '#000000';
         g.fillRect(0, 0, M.W, M.H);
       }
-      drawScreen(s, FULL, now);
+      drawScreen(s, full(), now);
       g.restore();
       return;
     }
@@ -409,6 +428,7 @@ export function createOS({ canvas, player, library, art, apps, settings = defaul
   }
 
   function paint(now) {
+    const scale = canvas.width / M.W;
     g.setTransform(scale, 0, 0, scale, 0, 0);
     g.globalAlpha = 1;
     g.globalCompositeOperation = 'source-over';

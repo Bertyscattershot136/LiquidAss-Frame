@@ -1,0 +1,8 @@
+newmtl nano_cap_bottom
+Kd 1 1 1
+Ns 64
+d 1
+illum 2
+Ka 0 0 0
+Ks 0.1 0.1 0.1
+map_Kd nano_cap_bottom_color.png

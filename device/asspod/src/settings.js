@@ -1,5 +1,7 @@
 // The assPod's settings, for this session only: kept in memory in SteamVR's page (never written to
-// disk, like the rest of LiquidAss), so a SteamVR restart starts from the defaults.
+// disk, like the rest of LiquidAss), so a SteamVR restart starts from the defaults. The exception, by
+// request: the body and its colours (model, finish, nanoFinish), which the plugin keeps across
+// launches (device/shell_ext/asspod.py PREFS) and hands back at each open.
 import { Emitter } from './util/emitter.js';
 
 export const DEFAULTS = Object.freeze({
@@ -11,7 +13,9 @@ export const DEFAULTS = Object.freeze({
   clicker: true,
   volume: 0.6,               // 0..1
   timeFormat: '12',          // '12' | '24'
-  finish: 'black',           // 'black' | 'white': the body
+  model: 'video',            // 'video' | 'nano': the body (models.js)
+  finish: 'black',           // the Video's colour: 'black' | 'white'
+  nanoFinish: 'silver',      // the nano's: 'silver' | 'green' | 'blue' | 'pink' | 'black' | 'red'
   ratings: {},               // trackId -> 0..5 (always replace the object, never mutate it)
   plays: {},                 // trackId -> [playCount, lastPlayed]
 });

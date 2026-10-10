@@ -1,0 +1,230 @@
+<!doctype html>
+<!-- Exports the assPod nano's 3D body (nano2-model.js) as SteamVR render models: one folder per part
+     under device/asspod/model/, each <name>.obj + <name>.mtl + texture (and raw RGBA where podd
+     samples it). SteamVR draws them in the hand without podd; podd (native/podd) draws the same
+     meshes with its own shaders (the anodized aluminum, the etched back, the white caps).
+
+     Run: python tools/build_asspod_model.py --page tools/nano2-model/export.html
+
+     Parts: nano_shell_<finish> (the tube: front, rolled sides and the cut rims), nano_back_<finish>
+     (the flat back, planar-mapped onto the engraving), nano_center_<finish> (the aluminum center
+     button), nano_wheel_<white|black>, nano_cap_top (white cap with the hold slider and HOLD),
+     nano_cap_bottom, nano_ports (slot, dock connector, jack: a palette texture), nano_well (the
+     dark well behind the wheel and the inside of the tube at the caps), nano_back_mask (the
+     engraving as a mask for podd). -->
+<html><head><meta charset="utf-8"><title>assPod nano model export</title>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head><body>
+<pre id="log">exporting…</pre>
+<script type="module">
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { createNano2Model, GEOMETRY, FINISHES, drawWheel, engravingCanvas } from './nano2-model.js';
+
+const { BODY, CAP } = GEOMETRY;
+const FILES = {};
+const log = (s) => { document.getElementById('log').textContent += '\n' + s; };
+const DIR = 'device/asspod/model/';
+
+// ---- textures
+function canvas(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+const b64 = (c) => c.toDataURL('image/png').split(',')[1];
+// raw RGBA for podd: "RGBA", width, height (u32 little-endian), rows top first
+function rgba(c) {
+  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  const out = new Uint8Array(12 + d.length);
+  out.set([82, 71, 66, 65]);
+  new DataView(out.buffer).setUint32(4, c.width, true);
+  new DataView(out.buffer).setUint32(8, c.height, true);
+  out.set(d, 12);
+  let bin = '';
+  for (let i = 0; i < out.length; i += 0x8000) bin += String.fromCharCode.apply(null, out.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+function solid(hex) {
+  const c = canvas(8, 8);
+  const g = c.getContext('2d');
+  g.fillStyle = hex;
+  g.fillRect(0, 0, 8, 8);
+  return c;
+}
+function scaled(src, w, h) {
+  const c = canvas(w, h);
+  const g = c.getContext('2d');
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(src, 0, 0, w, h);
+  return c;
+}
+
+// ---- OBJ writer (as tools/asspod-model/export.html): non-indexed, positions/uvs/normals in model metres
+function objText(name, geo) {
+  const g = geo.index ? geo.toNonIndexed() : geo;
+  const p = g.attributes.position, n = g.attributes.normal, t = g.attributes.uv;
+  const out = [`# ${name}: the assPod nano body (tools/nano2-model/export.html)`, `mtllib ${name}.mtl`, `usemtl ${name}`];
+  const f = (v) => v.toFixed(6);
+  for (let i = 0; i < p.count; i++) out.push(`v ${f(p.getX(i))} ${f(p.getY(i))} ${f(p.getZ(i))}`);
+  for (let i = 0; i < p.count; i++) out.push(`vt ${f(t ? t.getX(i) : 0.5)} ${f(t ? t.getY(i) : 0.5)}`);
+  for (let i = 0; i < p.count; i++) out.push(`vn ${f(n.getX(i))} ${f(n.getY(i))} ${f(n.getZ(i))}`);
+  for (let i = 0; i < p.count; i += 3) out.push(`f ${i + 1}/${i + 1}/${i + 1} ${i + 2}/${i + 2}/${i + 2} ${i + 3}/${i + 3}/${i + 3}`);
+  return out.join('\n') + '\n';
+}
+function mtlText(name, { ks = 0.04, ns = 256 } = {}) {
+  return `newmtl ${name}\nKd 1 1 1\nNs ${ns}\nd 1\nillum 2\nKa 0 0 0\nKs ${ks} ${ks} ${ks}\nmap_Kd ${name}_color.png\n`;
+}
+function part(name, geo, tex, mtl, { raw = false } = {}) {
+  const dir = DIR + name + '/';
+  FILES[dir + name + '.obj'] = { text: objText(name, geo) };
+  FILES[dir + name + '.mtl'] = { text: mtlText(name, mtl) };
+  FILES[dir + name + '_color.png'] = { b64: b64(tex) };
+  if (raw) FILES[dir + name + '_color.rgba'] = { b64: rgba(tex) };
+  log(`${name}: ${(geo.index ? geo.index.count : geo.attributes.position.count) / 3} triangles`);
+}
+
+// ---- geometry helpers
+function baked(mesh, root) {
+  root.updateMatrixWorld(true);
+  const g = mesh.geometry.clone();
+  if (!g.attributes.normal) g.computeVertexNormals();
+  g.applyMatrix4(mesh.matrixWorld);
+  return g.index ? g.toNonIndexed() : g;
+}
+function keep(g, names) {
+  for (const k of Object.keys(g.attributes)) if (!names.includes(k)) g.deleteAttribute(k);
+  return g;
+}
+/** Splits a non-indexed geometry by a per-triangle test (positions of its three corners). */
+function split(geo, test) {
+  const p = geo.attributes.position;
+  const lists = [[], []];
+  for (let i = 0; i < p.count; i += 3) {
+    const tri = [0, 1, 2].map((k) => new THREE.Vector3().fromBufferAttribute(p, i + k));
+    lists[test(tri) ? 0 : 1].push(i);
+  }
+  return lists.map((list) => {
+    const out = new THREE.BufferGeometry();
+    for (const [key, src] of Object.entries(geo.attributes)) {
+      const arr = new Float32Array(list.length * 3 * src.itemSize);
+      list.forEach((i, j) => { for (let k = 0; k < 3; k++) for (let c = 0; c < src.itemSize; c++) arr[(j * 3 + k) * src.itemSize + c] = src.array[(i + k) * src.itemSize + c]; });
+      out.setAttribute(key, new THREE.BufferAttribute(arr, src.itemSize));
+    }
+    return out;
+  });
+}
+function setUV(geo, fn) {
+  const p = geo.attributes.position;
+  const uv = new Float32Array(p.count * 2);
+  for (let i = 0; i < p.count; i++) {
+    const [u, v] = fn(p.getX(i), p.getY(i), p.getZ(i));
+    uv[i * 2] = u; uv[i * 2 + 1] = v;
+  }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  return geo;
+}
+const merge = (list) => mergeGeometries(list.map((g) => keep(g.index ? g.toNonIndexed() : g, ['position', 'normal', 'uv'])));
+const withUv = (g) => (g.attributes.uv ? g : setUV(g, () => [0.5, 0.5]));
+
+// ---- the body, once (the geometry is the same for every finish)
+const model = createNano2Model({ envMap: null, finish: 'silver', screenCanvas: canvas(176, 132) });
+const P = model.parts;
+const root = model.root;
+const BACK_Z = -BODY.d / 2;
+const onBack = (tri) => tri.every((v) => Math.abs(v.z - BACK_Z) < 1e-6);
+const [backGeo, rollGeo] = split(baked(P.shell, root), onBack);
+const shellGeo = merge([rollGeo, baked(P.front, root), baked(P.rim, root)]);
+// the back, seen from behind: +x of the model is the viewer's left, so u runs from +x to -x
+setUV(backGeo, (x, y) => [0.5 - x / BODY.w, 0.5 + y / BODY.h]);
+const centerGeo = keep(baked(P.button, root), ['position', 'normal', 'uv']);
+const wheelGeo = keep(baked(P.wheel, root), ['position', 'normal', 'uv']);
+// caps: top (with the hold slider) and bottom, planar over x and z (seen from above, -z up)
+const [capTop, capBottom] = split(baked(P.cap, root), (tri) => tri[0].y > 0);
+const capUv = (g) => setUV(g, (x, y, z) => [0.5 + x / BODY.w, 0.5 - z / BODY.d]);
+const capTopGeo = capUv(merge([withUv(capTop), withUv(baked(P.knob, root))]));
+const capBottomGeo = capUv(merge([withUv(capBottom)]));
+const wellGeo = merge([withUv(baked(P.well, root)), withUv(baked(P.wall, root))]);
+
+// ports: their vertex colours become a palette texture, each vertex pointing at its colour's texel
+const portsGeo = baked(P.ports, root);
+const palette = [];
+{
+  const col = portsGeo.attributes.color;
+  const uv = new Float32Array(col.count * 2);
+  const keyOf = (i) => [col.getX(i), col.getY(i), col.getZ(i)].map((v) => Math.round(v * 255)).join(',');
+  for (let i = 0; i < col.count; i++) {
+    const k = keyOf(i);
+    let idx = palette.indexOf(k);
+    if (idx < 0) { palette.push(k); idx = palette.length - 1; }
+    uv[i * 2] = idx;   // fixed below, once the palette's size is known
+    uv[i * 2 + 1] = 0.5;
+  }
+  for (let i = 0; i < col.count; i++) uv[i * 2] = (uv[i * 2] + 0.5) / palette.length;
+  portsGeo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  keep(portsGeo, ['position', 'normal', 'uv']);
+}
+const paletteTex = canvas(palette.length * 4, 4);
+palette.forEach((k, i) => {
+  const g = paletteTex.getContext('2d');
+  g.fillStyle = `rgb(${k})`;
+  g.fillRect(i * 4, 0, 4, 4);
+});
+
+// ---- textures shared by every finish
+const BACK_W = 256, BACK_H = Math.round(256 * BODY.h / BODY.w);
+const mask = scaled(engravingCanvas(), BACK_W, BACK_H);   // white = engraved
+FILES[DIR + 'nano_back_mask/nano_back_mask.rgba'] = { b64: rgba(mask) };
+// the top cap: white plastic with HOLD printed right of the slot (nano2-model.js holdLabel)
+const CAP_W = 512, CAP_H = Math.round(512 * BODY.d / BODY.w);
+const capTex = canvas(CAP_W, CAP_H);
+{
+  const g = capTex.getContext('2d');
+  const k = CAP_W / (BODY.w * 1000);   // px per mm
+  g.fillStyle = '#f1f1ef';
+  g.fillRect(0, 0, CAP_W, CAP_H);
+  g.fillStyle = '#93969a';
+  g.font = `600 ${0.8 * k}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+  g.textBaseline = 'middle';
+  g.fillText('HOLD', (BODY.w * 1000 / 2 - 5.1) * k, CAP_H / 2);
+}
+
+for (const [key, fin] of Object.entries(FINISHES)) {
+  part(`nano_shell_${key}`, shellGeo, solid(fin.metal), { ks: 0.3, ns: 64 });
+  part(`nano_center_${key}`, centerGeo, solid(fin.metal), { ks: 0.3, ns: 64 });
+  // the back with its engraving: the bare aluminum shows paler through the laser mark
+  const back = canvas(BACK_W, BACK_H);
+  {
+    const g = back.getContext('2d');
+    g.fillStyle = fin.metal;
+    g.fillRect(0, 0, BACK_W, BACK_H);
+    const pale = new THREE.Color(fin.metal).lerp(new THREE.Color(0xffffff), key === 'black' ? 0.55 : 0.4);
+    const img = g.getImageData(0, 0, BACK_W, BACK_H);
+    const m = mask.getContext('2d').getImageData(0, 0, BACK_W, BACK_H).data;
+    const pr = [pale.r, pale.g, pale.b].map((v) => v * 255);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const a = m[i] / 255;
+      for (let c = 0; c < 3; c++) img.data[i + c] = Math.round(img.data[i + c] * (1 - a) + pr[c] * a);
+    }
+    g.putImageData(img, 0, 0);
+  }
+  part(`nano_back_${key}`, backGeo, back, { ks: 0.3, ns: 64 });
+}
+for (const [name, fin] of [['white', FINISHES.silver], ['black', FINISHES.black]]) {
+  const c = canvas(1024, 1024);
+  drawWheel(c, fin);
+  part(`nano_wheel_${name}`, wheelGeo, scaled(c, 512, 512), { ks: 0.08, ns: 64 }, { raw: true });
+}
+part('nano_cap_top', capTopGeo, capTex, { ks: 0.1, ns: 64 }, { raw: true });
+part('nano_cap_bottom', capBottomGeo, solid('#f1f1ef'), { ks: 0.1, ns: 64 }, { raw: true });
+part('nano_ports', portsGeo, paletteTex, { ks: 0.2 }, { raw: true });
+part('nano_well', wellGeo, solid('#050505'), { ks: 0 });
+
+window.FILES = FILES;
+log('exported ' + Object.keys(FILES).length + ' files');
+fetch('/asspod-model', { method: 'POST', body: JSON.stringify(FILES) })
+  .then((r) => r.text()).then((t) => { log('saved: ' + t); window.DONE = true; })
+  .catch((e) => { log('not saved (open this page through tools/build_asspod_model.py): ' + e); window.DONE = true; });
+</script>
+</body></html>

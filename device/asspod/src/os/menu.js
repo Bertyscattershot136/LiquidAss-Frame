@@ -66,7 +66,11 @@ export function createMenu(ctx, def) {
   }
 
   function refresh() {
+    // the highlight stays on its item when the list changes around it (the main menu without Videos)
+    const was = items[index];
     items = resolve(def.items) ?? [];
+    const j = was ? items.indexOf(was) : -1;
+    if (j >= 0) index = j;
     clampWindow();
   }
 
